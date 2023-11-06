@@ -1,0 +1,45 @@
+Detailed tutorial:
+https://nvpro-samples.github.io/vk_mini_path_tracer/index.html#computeshaders
+
+
+Ray-grid intersection
+
+Alg 1:
+
+Start at (start_x, start_y, start_z)
+Identify “slowest” axis (i.e. axis A such that dA/dB < 1 and dA/dC < 1)
+last_b, last_c = (start_b, start_c)
+b_dir = -1 if dB/dA < 0 else 1
+c_dir = -1 if dC/dA < 0 else 1
+Step along axis A from a: int = ceil(start_a) to i = a_border_max
+    b = last_b + dB/dA
+    c = last_c + dC/dA
+    bi = int(b)
+    ci = int(c)
+    last_bi = int(last_b)
+    last_ci = int(last_c)
+
+    b_crossed = bi != last_bi
+    c_crossed = ci != last ci
+    b_cross_sooner = (bi - last_b) / (dB/dA) < (ci - last_c) / (dC/dA)   (divides here can be made multiplies)
+
+    if b_crossed and c_crossed:
+        if b_cross_sooner:
+            intersect voxel [a-1, bi, last_ci]
+        else:
+            intersect voxel [a-1, last_bi, ci]
+
+    if b_crossed or c_crossed:
+        intersect voxel [a-1, bi, ci]
+
+    if not at border:
+        intersect voxel [a, bi, ci]
+
+
+cost = CHUNK_SIDE_LEN * (
+    7 * register_ops +
+    6 * float_to_int +
+    2 * float_add +
+    3 * branches +
+    4 * voxel intersect logic
+) + (constant cost)

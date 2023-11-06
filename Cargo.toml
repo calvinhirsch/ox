@@ -6,4 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-vulkano = "0.33.0"
+vulkano = "0.34.1"
+vulkano-win = "0.34.0"
+vulkano-shaders = "0.34.0"
+winit = "0.28.3"
+bitvec = "1.0.1"
+bytemuck = "1.14.0"
+itertools = "0.11.0"
+num-traits = "0.2.17"
+
+[profile.dev]
+opt-level = 1

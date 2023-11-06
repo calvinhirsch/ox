@@ -1,0 +1,10 @@
+1. Making a device-local buffer
+    - Why do you have to use new_slice? (I don't get that at all)
+    - Very unclear that you have to specify size as the arg to new_slice but not in BufferCreateInfo
+2. Lack of proper logging in example/tutorial code.
+    - printing {error} instead of {error:?}
+    - seems like timeout = None obfuscates errors, should put 5 secs in tutorials or something
+3. Struct alignment
+    - I didn't realize for a while that you could specify layout(scalar) in GLSL and it made repr(C) just work. Maybe
+      make that much more obvious in shader docs.
+    - Also link alignment discussion in shader docs from buffer docs
