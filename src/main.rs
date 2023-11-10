@@ -1,11 +1,12 @@
 use std::error::Error;
+use std::f32::consts::PI;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract};
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SecondaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::{PhysicalDevice};
@@ -14,7 +15,7 @@ use vulkano::device::{
 };
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
 use vulkano::image::{ImageUsage, Image};
-use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocatePreference, MemoryTypeFilter, StandardMemoryAllocator};
 
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
@@ -26,25 +27,29 @@ use vulkano::sync::future::FenceSignalFuture;
 use vulkano::sync::{self, GpuFuture};
 use vulkano::memory::MemoryPropertyFlags;
 use vulkano::{Validated, VulkanError};
+use vulkano::instance::debug::ValidationFeatureEnable;
 
-use winit::event::{Event, WindowEvent};
+use winit::event::{DeviceEvent, Event, KeyboardInput, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::{Window, WindowBuilder};
+use winit::window::{CursorGrabMode, Window, WindowBuilder};
 use winit::dpi::PhysicalSize;
 
+use cgmath::{Deg, Point3, Rad};
 use itertools::Itertools;
 use num_traits::PrimInt;
+
+mod camera;
+use crate::camera::{Camera, CameraController, CameraUBO};
 
 
 const N_CHUNK_LVLS: usize = 2;
 const CHUNK_SIZE: usize = 8;
 const CHUNK_BLOCK_SIZES: [usize; N_CHUNK_LVLS+1] = [
     1,
-    CHUNK_SIZE.pow(3),
-    CHUNK_SIZE.pow(6),
+    CHUNK_SIZE,
+    CHUNK_SIZE*CHUNK_SIZE,
 ];
 const RENDER_N_TLCS: usize = 4;
-const MATERIAL_INDEX_BITS: usize = 8;  // this is partially hardcoded also
 const SUBGROUP_SIZE: u32 = 8;
 
 const N_CHUNKS: [usize; N_CHUNK_LVLS+1] = [
@@ -53,7 +58,7 @@ const N_CHUNKS: [usize; N_CHUNK_LVLS+1] = [
     RENDER_N_TLCS.pow(2),
 ];
 const TLC_SIZE: usize = CHUNK_SIZE.pow(N_CHUNK_LVLS as u32);
-const VMI_BUFFER_LEN: usize = RENDER_N_TLCS*RENDER_N_TLCS * CHUNK_SIZE.pow((N_CHUNK_LVLS * 3) as u32) * MATERIAL_INDEX_BITS / 128;
+const VMI_BUFFER_LEN: usize = N_CHUNKS[0] / 16;  // 16 u8's per uvec4
 
 
 trait ArithmeticModulo {
@@ -132,22 +137,9 @@ const MATERIALS: [Material; 4] = [
 #[derive(BufferContents, Debug, Clone)]
 #[repr(C)]
 struct Ubo {
-    // #[format(R32G32B32_SFLOAT)]
-    eye: [f32; 3],
-    // #[format(R32G32B32_SFLOAT)]
-    focal_pt: [f32; 3],
-    // #[format(R32G32B32_SFLOAT)]
-    right_dir: [f32; 3],  // should be normalized
-    // #[format(R32G32B32_SFLOAT)]
-    up_dir: [f32; 3],  // should be normalized
-    // #[format(R32G32B32_SFLOAT)]
     sun_dir: [f32; 3],
-
-    // #[format(R32_SINT)]
     tlc_minxi: i32,
-    // #[format(R32_SINT)]
     tlc_minzi: i32,
-    // #[format(R32_UINT)]
     time: u32,
 }
 
@@ -163,14 +155,20 @@ struct TopLevelChunkIndex {
 #[repr(C)]
 struct MaterialIndex {
     // #[format(R32G32B32A32_UINT)]
-    indices: [u8; 128/MATERIAL_INDEX_BITS],
+    indices: [u32; 4],
 }
 
-#[derive(BufferContents, Debug, Clone, Copy)]
+#[derive(BufferContents, Clone, Copy)]
 #[repr(C)]
 struct VoxelBitmask {
     // #[format(R32G32B32A32_UINT)]
-    mask: u128,
+    mask: [u32; 4],
+}
+
+impl Display for VoxelBitmask {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#032b}; {:#032b}; {:#032b}; {:#032b}", self.mask[3], self.mask[2], self.mask[1], self.mask[0])
+    }
 }
 
 
@@ -213,7 +211,8 @@ fn get_compute_command_buffers(
     descriptor_set_allocator: &StandardDescriptorSetAllocator,
     command_buffer_allocator: &StandardCommandBufferAllocator,
     material_buffer: &Subbuffer<[Material]>,
-    ubo_buffer: &Subbuffer<[Ubo]>,
+    camera_buffer: &Subbuffer<CameraUBO>,
+    ubo_buffer: &Subbuffer<Ubo>,
     tlci_buffer: &Subbuffer<[TopLevelChunkIndex]>,
     vmi_buffer: &Subbuffer<[MaterialIndex]>,
     chunk_bitmask_buffers: &Vec<Subbuffer<[VoxelBitmask]>>,
@@ -229,12 +228,13 @@ fn get_compute_command_buffers(
                 vec![
                     WriteDescriptorSet::image_view(0, ImageView::new(image.clone(), ImageViewCreateInfo::from_image(image)).unwrap()),
                     WriteDescriptorSet::buffer(1, material_buffer.clone()),
-                    WriteDescriptorSet::buffer(2, ubo_buffer.clone()),
-                    WriteDescriptorSet::buffer(3, tlci_buffer.clone()),
-                    WriteDescriptorSet::buffer(4, vmi_buffer.clone()),
+                    WriteDescriptorSet::buffer(2, camera_buffer.clone()),
+                    WriteDescriptorSet::buffer(3, ubo_buffer.clone()),
+                    WriteDescriptorSet::buffer(4, tlci_buffer.clone()),
+                    WriteDescriptorSet::buffer(5, vmi_buffer.clone()),
                 ].into_iter().chain(
                     chunk_bitmask_buffers.iter()
-                        .zip(5..5+chunk_bitmask_buffers.len())
+                        .zip(6..6+chunk_bitmask_buffers.len())
                         .map(|(cbm_buffer, i)|
                              WriteDescriptorSet::buffer(i as u32, cbm_buffer.clone()),
                         )
@@ -287,7 +287,6 @@ fn voxel_index(x: i32, y: i32, z: i32, tlci: &[TopLevelChunkIndex; RENDER_N_TLCS
         let xlvl = ((x as f32 / CHUNK_BLOCK_SIZES[i] as f32).floor() as i64).amod(CHUNK_SIZE as i64) as usize;
         let ylvl = ((y as f32 / CHUNK_BLOCK_SIZES[i] as f32).floor() as i64).amod(CHUNK_SIZE as i64) as usize;
         let zlvl = ((z as f32 / CHUNK_BLOCK_SIZES[i] as f32).floor() as i64).amod(CHUNK_SIZE as i64) as usize;
-        println!("({}, {}, {}) @{} => ({}, {}, {})", x, y, z, i, xlvl, ylvl, zlvl);
         idx[i] = idx[i+1] * CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE + xlvl + ylvl * CHUNK_SIZE*CHUNK_SIZE + zlvl * CHUNK_SIZE;
     }
 
@@ -295,20 +294,25 @@ fn voxel_index(x: i32, y: i32, z: i32, tlci: &[TopLevelChunkIndex; RENDER_N_TLCS
 }
 
 fn update_voxel(voxel_idx: [usize; N_CHUNK_LVLS+1], material_id: u8, vmi: &mut Vec<MaterialIndex>, bitmasks: &mut Vec<Vec<VoxelBitmask>>) -> Result<(), OutOfBoundsErr> {
-    vmi[voxel_idx[0]*MATERIAL_INDEX_BITS/128].indices[voxel_idx[0] % (128/MATERIAL_INDEX_BITS)] = material_id;
+    let vmi_idx1 = voxel_idx[0]/16;
+    let vmi_idx2 = (voxel_idx[0] / 4) % 4;
+    let mut bytes = vmi[vmi_idx1].indices[vmi_idx2].to_le_bytes();
+    bytes[(voxel_idx[0] / 8) % 4] = material_id.to_le_bytes()[0];
+    vmi[vmi_idx1].indices[vmi_idx2] = u32::from_le_bytes(bytes);
+
     for (bitmask, idx) in bitmasks.iter_mut().zip( voxel_idx.iter()) {
         if let Some(bm) = bitmask.get_mut(idx / 128) {
-            let bit: u128 = 0x00000001 << (idx % 128);
+            let bit: u32 = 1 << (idx % 32);
             if material_id == 0 {
-                bm.mask &= !bit;
+                bm.mask[(idx % 128) / 32] &= !bit;
             }
             else {
-                bm.mask |= bit;
+                bm.mask[(idx % 128) / 32] |= bit;
             }
-            // TODO: Add region to transfer to GPU
         }
         else { return Err(OutOfBoundsErr { index: idx / 128, size: bitmask.len() }); }
     }
+    // TODO: Add region to transfer to GPU
     Ok(())
 }
 
@@ -327,13 +331,16 @@ fn main() {
     let instance = Instance::new(
         library,
         InstanceCreateInfo {
-            enabled_extensions: required_extensions,
+            enabled_extensions: required_extensions.union(&InstanceExtensions { ext_validation_features: true, ..Default::default() }),
+            enabled_layers: vec!["VK_LAYER_KHRONOS_validation".to_string()],
+            enabled_validation_features: vec![ValidationFeatureEnable::BestPractices, ValidationFeatureEnable::GpuAssisted, ValidationFeatureEnable::GpuAssistedReserveBindingSlot, ValidationFeatureEnable::SynchronizationValidation],
             ..Default::default()
         },
     )
     .expect("failed to create instance");
 
     let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
+    window.set_cursor_grab(CursorGrabMode::Locked).unwrap_or_default();
     let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
     let window = surface
@@ -346,6 +353,7 @@ fn main() {
 
     let device_extensions = DeviceExtensions {
         khr_swapchain: true,
+        ext_scalar_block_layout: true,
         ..DeviceExtensions::empty()
     };
 
@@ -408,72 +416,202 @@ fn main() {
 
     // Voxel material index
     let mut vmi: Vec<MaterialIndex> = (0..VMI_BUFFER_LEN)
-        .map(|_| MaterialIndex { indices: [0; 128/MATERIAL_INDEX_BITS ] })
+        .map(|_| MaterialIndex { indices: [0; 4] })
         .collect();
 
     // Bitmasks at each chunk level (excluding 0)
     let mut chunk_bitmasks: Vec<Vec<VoxelBitmask>> = (1..N_CHUNKS.len())
-        .map(|i| vec![VoxelBitmask { mask: 0 }; N_CHUNKS[i] * CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE / 128])
+        .map(|i| vec![VoxelBitmask { mask: [0; 4] }; N_CHUNKS[i] * CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE / 128])
         .collect_vec();
 
+    let mut camera = Camera {
+        position: Point3 { x: 14., y: 15.5, z: 3.0 },
+        pitch: Rad(0.0),
+        yaw: Rad(-PI),
+        viewport_dist: 0.1,
+        resolution: (dimensions.width, dimensions.height),
+        avg_fov: Rad(1.),
+        controller: CameraController::new(5., 1.),
+    };
+
     let ubo = Ubo {
-        eye: [0.0, 15.0, 0.0],
-        focal_pt: [0.0, 15.0, 1.0],
-        right_dir: [1.0, 0.0, 0.0,],
-        up_dir: [0.0, 1.0, 0.0],
         sun_dir: [0.39036, 0.78072, 0.48795],
         tlc_minxi: -2,
         tlc_minzi: -2,
         time: 0,
     };
 
-    // for tlcx in -2..2 {
-    //     for tlcy in -2..2 {
-    //         for x in 0..CHUNK_SIZE as i32 {
-    //             for y in 0..(tlcx+tlcy) {
-    //                 for z in 0..CHUNK_SIZE as i32 {
-    //                     match update_voxel(
-    //                         voxel_index(x, y, z, &tlci),
-    //                         if x % 12 == 0 { 3 } else if y % 7 == 0 { 2 } else { 1 },
-    //                         &mut vmi,
-    //                         &mut chunk_bitmasks,
-    //                     ) {
-    //                         Ok(_) => {},
-    //                         Err(e) => { panic!("Failed to update voxel ({}, {}, {}) in TLC ({}, {}) : {}", x, y, z, tlcx, tlcy, e); }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+    println!("UBO: {:?}", ubo);
+
+    for tlcx in -2..2 {
+        for tlcy in -2..2 {
+            for x in 0..TLC_SIZE as i32 {
+                for y in 0..1 { //(tlcx+tlcy + 4) {
+                    for z in 0..TLC_SIZE as i32 {
+                        match update_voxel(
+                            voxel_index(x + tlcx * TLC_SIZE as i32, y, z + tlcy * TLC_SIZE as i32, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+                            if x % 12 == 0 { 3 } else if z % 7 == 0 { 2 } else { 1 },
+                            &mut vmi,
+                            &mut chunk_bitmasks,
+                        ) {
+                            Ok(_) => {},
+                            Err(e) => { panic!("Failed to update voxel ({}, {}, {}) in TLC ({}, {}) : {}", x, y, z, tlcx, tlcy, e); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // update_voxel(
+    //     voxel_index(-1, 14, 3, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+    //     1,
+    //     &mut vmi,
+    //     &mut chunk_bitmasks,
+    // ).unwrap();
+    update_voxel(
+        voxel_index(1, 14, 3, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    // update_voxel(
+    //     voxel_index(-1, 15, 7, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+    //     1,
+    //     &mut vmi,
+    //     &mut chunk_bitmasks,
+    // ).unwrap();
+    update_voxel(
+        voxel_index(1, 15, 7, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    // update_voxel(
+    //     voxel_index(-3, 13, 10, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+    //     1,
+    //     &mut vmi,
+    //     &mut chunk_bitmasks,
+    // ).unwrap();
+    update_voxel(
+        voxel_index(3, 13, 10, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
+        voxel_index(9, 15, 7, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
+        voxel_index(9, 15, 13, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
 
     update_voxel(
-        voxel_index(-1, 14, 5, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        voxel_index(9, 15, 14, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
         1,
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
     update_voxel(
-        voxel_index(1, 14, 5, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        voxel_index(8, 15, 14, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
         1,
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
     update_voxel(
-        voxel_index(-1, 15, 15, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        voxel_index(9, 15, 13, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
         1,
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
     update_voxel(
-        voxel_index(1, 15, 15, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        voxel_index(8, 15, 13, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
+        voxel_index(9, 14, 14, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
+        voxel_index(8, 14, 14, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
+        voxel_index(9, 14, 13, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
+        voxel_index(8, 14, 13, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
         1,
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
 
-    println!("{:?}", voxel_index(1, 14, 5, &tlci, ubo.tlc_minxi, ubo.tlc_minzi));
-    println!("{:#b}", chunk_bitmasks[0][voxel_index(1, 14, 5, &tlci, ubo.tlc_minxi, ubo.tlc_minzi)[0]].mask);
+    let idx = voxel_index(-3, 13, 10, &tlci, ubo.tlc_minxi, ubo.tlc_minzi);
+    println!("0: {}, {}", idx[0], idx[0] % 128);
+    println!("0: {}", vmi[idx[0] / 16].indices[(idx[0] / 4) % 4]);
+    println!("0: {:#b}", chunk_bitmasks[0][idx[0]/128].mask[(idx[0]%128)/32]);
+    println!("1: {}, {}", idx[1], idx[1] % 128);
+    println!("1: {:#b}", chunk_bitmasks[1][idx[1]/128].mask[(idx[1]%128)/32]);
+
+    let mut sum = 0;
+    for vmi_i in vmi.iter() {
+        for x in vmi_i.indices.iter() {
+            if *x > 0 {
+                sum += 1;
+            }
+        }
+    }
+    println!("{}", sum);
+
+    // Camera
+
+    let camera_staging_buffer: Subbuffer<CameraUBO> = Buffer::from_data(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter {
+                required_flags: MemoryPropertyFlags::HOST_VISIBLE,
+                ..Default::default()
+            },
+            allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
+            ..Default::default()
+        },
+        CameraUBO::new(&camera, Point3::new(0.0, 0.0, 0.0)).clone(),
+    ).unwrap();
+
+    let camera_buffer: Subbuffer<CameraUBO> = Buffer::new_sized(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::UNIFORM_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter {
+                required_flags: MemoryPropertyFlags::DEVICE_LOCAL,
+                ..Default::default()
+            },
+            allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
+            ..Default::default()
+        },
+    ).unwrap();
 
     // UBO
 
@@ -494,7 +632,7 @@ fn main() {
         ubo.clone(),
     ).unwrap();
 
-    let ubo_buffer: Subbuffer<[Ubo]> = Buffer::new_slice(
+    let ubo_buffer: Subbuffer<Ubo> = Buffer::new_sized(
         memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::TRANSFER_DST | BufferUsage::UNIFORM_BUFFER,
@@ -508,7 +646,6 @@ fn main() {
             allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
             ..Default::default()
         },
-        ubo_staging_buffer.size(),
     ).unwrap();
 
     // Top level chunk index
@@ -544,7 +681,7 @@ fn main() {
             allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
             ..Default::default()
         },
-        tlci_staging_buffer.size()
+        tlci_staging_buffer.len()
     ).unwrap();
 
     // Materials
@@ -552,7 +689,7 @@ fn main() {
     let temp_material_staging_buffer = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::TRANSFER_SRC,
+            usage: BufferUsage::TRANSFER_SRC | BufferUsage::UNIFORM_BUFFER,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -580,11 +717,12 @@ fn main() {
             allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
             ..Default::default()
         },
-        temp_material_staging_buffer.size(),
+        temp_material_staging_buffer.len(),
     ).unwrap();
 
     // Voxel material index buffer
-    let vmi_staging_buffer = Buffer::from_iter(
+
+    let vmi_staging_buffer: Subbuffer<[MaterialIndex]> = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::TRANSFER_SRC,
@@ -604,7 +742,7 @@ fn main() {
     let vmi_buffer: Subbuffer<[MaterialIndex]> = Buffer::new_slice(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::TRANSFER_DST | BufferUsage::UNIFORM_BUFFER,
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -615,7 +753,7 @@ fn main() {
             allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
             ..Default::default()
         },
-        vmi_staging_buffer.size(),
+        vmi_staging_buffer.len(),
     ).unwrap();
 
     // Bitmasks
@@ -625,7 +763,7 @@ fn main() {
             Buffer::from_iter(
                 memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC,
+                    usage: BufferUsage::TRANSFER_SRC,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
@@ -636,7 +774,7 @@ fn main() {
                     allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
                     ..Default::default()
                 },
-                cbm.to_vec(),
+                cbm.iter().copied(),
             ).unwrap()
         ).collect();
 
@@ -646,7 +784,7 @@ fn main() {
             Buffer::new_slice(
                 memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::TRANSFER_DST | BufferUsage::UNIFORM_BUFFER,
+                    usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
@@ -657,7 +795,7 @@ fn main() {
                     allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
                     ..Default::default()
                 },
-                cbm_sb.size(),
+                cbm_sb.len(),
             ).unwrap()
         ).collect();
 
@@ -677,6 +815,8 @@ fn main() {
                 .unwrap()[0]
                 .0;
 
+        println!("MIC: {:?}", caps.min_image_count);
+
         Swapchain::new(
             Arc::clone(&device),
             surface,
@@ -693,56 +833,92 @@ fn main() {
     };
 
     let command_buffer_allocator =
-        StandardCommandBufferAllocator::new(device.clone(), Default::default());
+        StandardCommandBufferAllocator::new(
+            device.clone(),
+            StandardCommandBufferAllocatorCreateInfo {
+                secondary_buffer_count: 2,
+                ..Default::default()
+            }
+        );
 
     // Transfer stage
 
-    let transfer_command_buffers: Vec<Arc<PrimaryAutoCommandBuffer>> = (0..images.len())
-        .map(|_| {
-            let mut builder = AutoCommandBufferBuilder::primary(
-                &command_buffer_allocator,
-                transfer_queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )
-            .unwrap();
+    let continuous_transfer_sub_command_buffer: Arc<SecondaryAutoCommandBuffer> = {
+        let mut builder = AutoCommandBufferBuilder::secondary(
+            &command_buffer_allocator,
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::MultipleSubmit,
+            CommandBufferInheritanceInfo {
+                render_pass: None,
+                occlusion_query: None,
+                query_statistics_flags: Default::default(),
+                ..Default::default()
+            },
+        ).unwrap();
 
-            builder.copy_buffer(CopyBufferInfo::buffers(
-                temp_material_staging_buffer.clone(),
-                material_buffer.clone(),
-            )).unwrap();
-            builder.copy_buffer(CopyBufferInfo::buffers(
-                ubo_staging_buffer.clone(),
-                ubo_buffer.clone(),
-            )).unwrap();
-            builder.copy_buffer(CopyBufferInfo::buffers(
-                tlci_staging_buffer.clone(),
-                tlci_buffer.clone(),
-            )).unwrap();
-            builder.copy_buffer(CopyBufferInfo::buffers(
-                vmi_staging_buffer.clone(),
-                vmi_buffer.clone(),
-            )).unwrap();
-            for (staging, local) in chunk_bitmask_staging_buffers
-                .iter()
-                .zip(chunk_bitmask_buffers.iter()) {
-                builder.copy_buffer(CopyBufferInfo::buffers(
-                    staging.clone(),
-                    local.clone(),
-                )).unwrap();
-            }
+        builder.copy_buffer(CopyBufferInfo::buffers(
+            temp_material_staging_buffer.clone(),
+            material_buffer.clone(),
+        )).unwrap();
+        builder.copy_buffer(CopyBufferInfo::buffers(
+            camera_staging_buffer.clone(),
+            camera_buffer.clone(),
+        )).unwrap();
+        builder.copy_buffer(CopyBufferInfo::buffers(
+            ubo_staging_buffer.clone(),
+            ubo_buffer.clone(),
+        )).unwrap();
+        builder.copy_buffer(CopyBufferInfo::buffers(
+            tlci_staging_buffer.clone(),
+            tlci_buffer.clone(),
+        )).unwrap();
 
-            builder.build().unwrap()
-        })
-        .collect();
+        builder.build().unwrap()
+    };
 
-    for cb in transfer_command_buffers {
-        cb.execute(transfer_queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
-    }
+    let one_time_transfer_command_buffer: Arc<PrimaryAutoCommandBuffer> = {
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &command_buffer_allocator,
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        ).unwrap();
+
+        builder.execute_commands(continuous_transfer_sub_command_buffer.clone()).unwrap();
+
+        builder.copy_buffer(CopyBufferInfo::buffers(
+            vmi_staging_buffer.clone(),
+            vmi_buffer.clone(),
+        )).unwrap();
+        for (staging, local) in chunk_bitmask_staging_buffers
+            .iter()
+            .zip(chunk_bitmask_buffers.iter()) {
+            builder.copy_buffer(CopyBufferInfo::buffers(
+                staging.clone(),
+                local.clone(),
+            )).unwrap();
+        };
+
+        builder.build().unwrap()
+    };
+
+    one_time_transfer_command_buffer.execute(transfer_queue.clone())
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    let continuous_transfer_command_buffer: Arc<PrimaryAutoCommandBuffer> = {
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &command_buffer_allocator,
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::MultipleSubmit,
+        ).unwrap();
+        builder.execute_commands(continuous_transfer_sub_command_buffer).unwrap();
+
+        builder.build().unwrap()
+    };
+
 
     // Compute stage
 
@@ -763,6 +939,7 @@ fn main() {
         &descriptor_set_allocator,
         &command_buffer_allocator,
         &material_buffer,
+        &camera_buffer,
         &ubo_buffer,
         &tlci_buffer,
         &vmi_buffer,
@@ -772,42 +949,63 @@ fn main() {
         &dimensions,
     );
 
+
     ////////////////
     // Event loop //
     ////////////////
 
-    println!("Materials buffer: {:?}", temp_material_staging_buffer.size());
-    println!("TCLI buffer: {:?}", tlci_staging_buffer.size());
-    println!("VMI buffer: {:?} MB", vmi_staging_buffer.size() as f32 / (1024.0*1024.0));
-    for b in chunk_bitmask_staging_buffers {
-        println!("Chunk bitmask buffer: {:?} MB", b.size() as f32 / (1024.0*1024.0));
+    println!("Materials staging buffer: {} ({} bytes)", temp_material_staging_buffer.len(), temp_material_staging_buffer.size());
+    println!("Materials buffer: {} ({} bytes)", material_buffer.len(), material_buffer.size());
+    println!("UBO staging buffer: {} bytes", ubo_staging_buffer.size());
+    println!("UBO buffer: {} bytes", ubo_buffer.size());
+    println!("TCLI staging buffer: {} ({} bytes)", tlci_staging_buffer.len(), tlci_staging_buffer.size());
+    println!("TCLI buffer: {} ({} bytes)", tlci_buffer.len(), tlci_buffer.size());
+    println!("VMI staging buffer: {} ({} MB)", vmi_staging_buffer.len(), vmi_staging_buffer.size() as f32 / (1024.0*1024.0));
+    println!("VMI buffer: {} ({} MB)", vmi_buffer.len(), vmi_buffer.size() as f32 / (1024.0*1024.0));
+    for (i, b) in chunk_bitmask_staging_buffers.iter().enumerate() {
+        println!("Chunk bitmask buffer {}: {} ({} MB)", i, b.len(), b.size() as f32 / (1024.0*1024.0));
     }
 
     let mut window_resized = false;
     let mut recreate_swapchain = false;
 
     let frames_in_flight = images.len();
-    let mut fences: Vec<Option<Arc<FenceSignalFuture<_>>>> = vec![None; frames_in_flight];
+    let mut transfer_fence: Option<Arc<FenceSignalFuture<_>>> = None;
+    let mut compute_fence: Option<Arc<FenceSignalFuture<_>>> = None;
+    let mut present_fences: Vec<Option<Arc<FenceSignalFuture<_>>>> = vec![None; frames_in_flight];
     let mut previous_fence_i = 0;
+    let mut last_render_time = Instant::now();
+
 
     event_loop.run(move |event, _, control_flow| match event {
-        Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
+        Event::DeviceEvent {
+            event: DeviceEvent::MouseMotion{ delta, },
+            .. // We're not using device_id currently
         } => {
-            *control_flow = ControlFlow::Exit;
+            camera.controller.process_mouse(delta.0, delta.1)
         }
-        Event::WindowEvent {
-            event: WindowEvent::Resized(_),
-            ..
-        } => {
-            window_resized = true;
+        Event::WindowEvent { event, .. } => {
+            match event {
+                WindowEvent::CloseRequested => { *control_flow = ControlFlow::Exit; }
+                WindowEvent::Resized(_) => { window_resized = true; }
+                WindowEvent::KeyboardInput {
+                    input: KeyboardInput {
+                        virtual_keycode: Some(key),
+                        state,
+                        ..
+                    },
+                    ..
+                } => { camera.controller.process_keyboard(key, state); }
+                _ => ()
+            }
         }
         Event::MainEventsCleared => {
             if window_resized || recreate_swapchain {
                 recreate_swapchain = false;
 
                 let new_dimensions = window.inner_size();
+                window.set_cursor_grab(CursorGrabMode::Confined).unwrap_or_default();
+                camera.resolution = (new_dimensions.width, new_dimensions.height);
 
                 let (new_swapchain, new_images) = match swapchain.recreate(SwapchainCreateInfo {
                     image_extent: new_dimensions.into(),
@@ -830,6 +1028,7 @@ fn main() {
                         &descriptor_set_allocator,
                         &command_buffer_allocator,
                         &material_buffer,
+                        &camera_buffer,
                         &ubo_buffer,
                         &tlci_buffer,
                         &vmi_buffer,
@@ -857,12 +1056,67 @@ fn main() {
                 recreate_swapchain = true;
             }
 
-            // wait for the fence related to this image to finish (normally this would be the oldest fence)
-            if let Some(image_fence) = &fences[image_i as usize] {
+            // Update
+
+            let now = Instant::now();
+            let dt = now - last_render_time;
+            last_render_time = now;
+            camera.apply_controller_updates(dt);
+
+            // Wait for staging buffers to be available
+
+            if let Some(tf) = &transfer_fence {
+                tf.wait(Some(Duration::from_secs(3))).unwrap();
+            }
+
+            // Transfer to staging buffers
+
+            {
+                let mut camera_buffer_content = camera_staging_buffer.write().unwrap();
+                camera_buffer_content.update(&camera, Point3::new(0., 0., 0.));
+            }
+
+            // Wait for the GPU to be done reading from device local buffer from previous frame (they are shared across frames)
+            // (and also make sure this image is available to be drawn to)
+
+            if let Some(fence) = &compute_fence {
+                fence.wait(Some(Duration::from_secs(3))).unwrap();
+            }
+            if let Some(image_fence) = &present_fences[previous_fence_i as usize] {
                 image_fence.wait(Some(Duration::from_secs(3))).unwrap();
             }
 
-            let previous_future = match fences[previous_fence_i as usize].clone() {
+            // Transfer from staging buffer to device local buffer
+
+            let previous_transfer_future = match transfer_fence.clone() {
+                None => {
+                    let mut now = sync::now(Arc::clone(&device));
+                    now.cleanup_finished();
+
+                    now.boxed()
+                }
+                Some(future) => { future.boxed() }
+            };
+
+            let transfer_future = previous_transfer_future
+                .then_execute(transfer_queue.clone(), continuous_transfer_command_buffer.clone())
+                .unwrap()
+                .then_signal_fence_and_flush();
+
+            transfer_fence = match transfer_future {
+                Ok(value) => Some(Arc::new(value)),
+                Err(e) => {
+                    println!("failed to flush future: {e:?}");
+                    None
+                }
+            };
+
+            // wait for the fence related to this image to finish (normally this would be the oldest fence)
+            if let Some(image_fence) = &present_fences[image_i as usize] {
+                image_fence.wait(Some(Duration::from_secs(3))).unwrap();
+            }
+
+            let previous_future = match present_fences[previous_fence_i as usize].clone() {
                 // Create a NowFuture
                 None => {
                     let mut now = sync::now(Arc::clone(&device));
@@ -874,17 +1128,31 @@ fn main() {
                 Some(fence) => fence.boxed(),
             };
 
-            let future = previous_future
+            // Join futures and set fence for this image
+
+            let compute_future = previous_future
+                .join(transfer_fence.clone().unwrap())
                 .join(acquire_future)
                 .then_execute(compute_queue.clone(), compute_command_buffers[image_i as usize].clone())
                 .unwrap()
+                .then_signal_fence_and_flush();
+
+            compute_fence = match compute_future {
+                Ok(value) => Some(Arc::new(value)),
+                Err(e) => {
+                    println!("failed to flush future: {e:?}");
+                    None
+                }
+            };
+
+            let future = compute_fence.clone().unwrap()
                 .then_swapchain_present(
                     graphics_queue.clone(),
                     SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
                 )
                 .then_signal_fence_and_flush();
 
-            fences[image_i as usize] = match future {
+            present_fences[image_i as usize] = match future {
                 Ok(value) => Some(Arc::new(value)),
                 Err(Validated::Error(VulkanError::OutOfDate)) => {
                     recreate_swapchain = true;

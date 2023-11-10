@@ -14,6 +14,7 @@ bitvec = "1.0.1"
 bytemuck = "1.14.0"
 itertools = "0.11.0"
 num-traits = "0.2.17"
+cgmath = "0.18.0"
 
 [profile.dev]
 opt-level = 1

@@ -6,21 +6,21 @@ const uint N_CASTS = 1;
 const uint CHUNK_SIZE = 8;  // Number of blocks in each chunk level
 const uint N_CHUNK_LVLS = 2;  // 2 means there are two chunk sizes (CHUNK_SIZE and CHUNK_SIZE**2) where the largest chunk size is the world height
 const uint RENDER_N_TLCHUNKS = 4;  // Render THIS x THIS top level chunks around player (assuming world is only 1 top level chunk high)
-const uint CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS+1] = {1, CHUNK_SIZE, CHUNK_SIZE*CHUNK_SIZE};  // Chunk level 0 means working directly with blocks (i.e. size of 1)
+const uint CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS+2] = {1, CHUNK_SIZE, CHUNK_SIZE*CHUNK_SIZE, 99999999};  // Chunk level 0 means working directly with blocks (i.e. size of 1)
 const uint BITMASK_IDX[32] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648};
 const uint N_CHUNKS[N_CHUNK_LVLS+1] = {
         CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS,
         CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS,
         RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS,
 };
-const uint N_MATERIAL_ID_BITS = 16;
+const uint N_MATERIAL_ID_BITS = 8;
 const uint MATERIALS_PER_VEC4 = 128 / N_MATERIAL_ID_BITS;
 const uint MATERIALS_PER_INT = 32 / N_MATERIAL_ID_BITS;
 const uint N_MATERIALS = 1 << N_MATERIAL_ID_BITS;
 
 const float MAX_SUN_EMISSION = 1;
 const float MIN_SUM_EMISSION = 0.25;
-const vec3 SUN_COLOR = vec3(1.0, 0.95, 0.5);
+const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);
 
 
 // Output image
@@ -38,14 +38,16 @@ layout (set = 0, binding = 1, scalar) uniform MaterialS {
     Material defs[4];
 } materials;
 
-// Uniform buffer object that holds all info that gets updated every frame
-layout (set = 0, binding = 2, scalar) readonly uniform UBO {
+layout (set = 0, binding = 2, scalar) readonly uniform Camera {
     vec3 eye;
-    vec3 focal_pt;
+    vec3 viewport_center;
     vec3 right_dir;
     vec3 up_dir;
-    vec3 sun_dir;
+} camera;
 
+// Uniform buffer object that holds all other info that gets updated every frame
+layout (set = 0, binding = 3, scalar) readonly uniform UBO {
+    vec3 sun_dir;
     int tlc_minxi;
     int tlc_minzi;
     uint time;
@@ -53,25 +55,30 @@ layout (set = 0, binding = 2, scalar) readonly uniform UBO {
 
 // Top level chunks are randomly ordered in memory to avoid mass copying. So this is a mapping from expected index
 // (where index = X + Z * RENDER_N_TLCHUNKS) to actual index
-layout (set = 0, binding = 3, scalar) readonly uniform TopLevelChunkIndices {
-    uvec4 indices[RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS];
+layout (set = 0, binding = 4, scalar) readonly uniform TopLevelChunkIndices {
+    uvec4 indices[RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS/4];
 } tlci;
 
 // Material IDs for each voxel
-layout (set = 0, binding = 4, scalar) readonly uniform MaterialIndex {
-    uvec4 indices[uint(N_CHUNKS[0] * N_MATERIAL_ID_BITS / 32 / 4)];
+layout (set = 0, binding = 5, scalar) readonly buffer MaterialIndex {
+    uvec4 indices[N_CHUNKS[0] * N_MATERIAL_ID_BITS / 128];
 } voxel_material_ids;
 
 // Chunk bitmasks at each chunk level
-layout (set = 0, binding = 5, scalar) readonly uniform VoxelBitmask0 {
-    uvec4 mask[uint((N_CHUNKS[0] + 31) / 32 / 4)];
+layout (set = 0, binding = 6, scalar) readonly buffer VoxelBitmask0 {
+    uvec4 mask[uint((N_CHUNKS[0] + 127) / 128)];
 } chunk_bitmasks0;
 
-layout (set = 0, binding = 6, scalar) readonly uniform VoxelBitmask1 {
-    uvec4 mask[uint((N_CHUNKS[1] + 31) / 32 / 4)];
+layout (set = 0, binding = 7, scalar) readonly buffer VoxelBitmask1 {
+    uvec4 mask[uint((N_CHUNKS[1] + 127) / 128)];
 } chunk_bitmasks1;
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+
+ivec3 amod (ivec3 v, uint m) {
+    return ivec3(((v % m) + m) % m);
+}
 
 
 // RNG
@@ -103,44 +110,115 @@ vec3 rand_dir(inout uint state) {
 
 // Ray tracing utils
 
+// Keeps track of current block/chunk at all levels (level 0 is a voxel position relative to lvl 1 chunk, level 1 is a
+// chunk position (in units of CHUNK_SIZE) relative to lvl2 chunk, lvl 2 chunk is chunk position (in units of
+// CHUNK_SIZE^2) relative to lvl3 chunk, etc.)
+// TODO: I don't understand why vec3 block[...] doesn't work, this is a workaround. Might be a better way.
+int block[N_CHUNK_LVLS+1][3];
+
+void set_block_all_lvls(vec3 ray_origin, uint at_lvl_and_below) {
+    for (int lvli = int(at_lvl_and_below); lvli >= 0; lvli--) {
+        ivec3 pt = amod(ivec3(floor(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvli])), CHUNK_SIZE);
+        block[lvli][0] = pt.x;
+        block[lvli][1] = pt.y;
+        block[lvli][2] = pt.z;
+    }
+}
+
+void step_block(uint ax, float ax_dir, uint lvl) {
+    // Step the block in ax_dir direction along ax at lvl
+    // If this will cross the boundary of a higher level chunk (i.e. block pos in ax < 0 or > CHUNK_SIZE
+    int incr;
+    int val;
+    if (ax_dir > 0) {
+        incr = 1;
+        val = 0;
+    }
+    else {
+        incr = -1;
+        val = int(CHUNK_SIZE)-1;
+    }
+
+    block[lvl][ax] += incr;
+    for (uint lvli = lvl; lvli < N_CHUNK_LVLS && (block[lvli][ax] == -1 || block[lvli][ax] == CHUNK_SIZE); lvli++) {
+        block[lvli+1][ax] += incr;
+        block[lvli][ax] = val;
+    }
+    for (int lvli = int(lvl)-1; lvli >= 0; lvli--) {
+        block[lvli][ax] = val;
+    }
+}
+
+uint block_index(uint lvl) {
+    if (lvl == N_CHUNK_LVLS) {
+        uint idx_to_look_up = (
+            block[lvl][0] +
+            block[lvl][1] * RENDER_N_TLCHUNKS * RENDER_N_TLCHUNKS +
+            block[lvl][2] * RENDER_N_TLCHUNKS
+        );
+        return tlci.indices[idx_to_look_up/4][idx_to_look_up%4];
+    }
+    return block[lvl][0] + block[lvl][1] * CHUNK_SIZE * CHUNK_SIZE + block[lvl][2] * CHUNK_SIZE;
+}
+
+uint chunk_botleft_index(uint lvl) {
+    // Get the index of the bottom left block of a chunk at lvl
+    uint idx = block_index(N_CHUNK_LVLS);
+    for (uint lvli = N_CHUNK_LVLS-1; lvli > lvl; lvli--) {
+        idx *= CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
+        idx += block_index(lvli);
+    }
+
+    return idx * CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
+}
+
+ivec3 abs_block(uint lvl) {
+    // Get the absolute position of the current block at lvl in lvl units
+    ivec3 pt = ivec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]);
+    if (lvl == 2) {
+        return pt;
+    }
+    for (int lvli = int(N_CHUNK_LVLS)-1; lvli >= lvl; lvli--) {
+        pt *= int(CHUNK_SIZE);
+        pt += ivec3(block[lvli][0], block[lvli][1], block[lvli][2]);
+    }
+
+    return pt;
+}
+
+ivec3 chunk_abs_botleft_block(uint lvl) {
+    // Get the absolute position of the bottom left of the current chunk at lvl+1 in units of the current lvl
+    if (lvl == 2) {
+        return ivec3(0, 0, 0);
+    }
+    return abs_block(lvl+1) * int(CHUNK_SIZE);
+}
+
 bool is_true_in_mask(uint idx, uint lvl) {
     if (lvl == N_CHUNK_LVLS) { return true; }
-    if (lvl == 0) { (chunk_bitmasks0.mask[idx / 128][(idx % 128) / 32] & (1 << (idx % 32))) > 0; }
-    return (chunk_bitmasks1.mask[idx / 128][(idx % 128) / 32] & (1 << (idx % 32))) > 0;
+    if (lvl == 0) { return (chunk_bitmasks0.mask[idx / 128][(idx / 32) % 4] & (0x0001 << (idx % 32))) > 0; }
+    return (chunk_bitmasks1.mask[idx / 128][(idx / 32) % 4] & (0x0001 << (idx % 32))) > 0;
 }
 
 uint grid_index(uint ai, uint bi, uint ci, uint ax_a, uint ax_b, uint ax_c, uint lvl) {
     // Returns index within the current chunk. Expects ai, bi, ci to be 0 <= value < CHUNK_SIZE for non-TL chunks
     // and returns a value between 0 and CHUNK_SIZE^3
-    // For top level chunks, returns a value between 0 and RENDER_N_TLCHUNKS
+    // For top level chunks, returns a value between 0 and RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS
     uvec3 idx;
     idx[ax_a] = ai;
     idx[ax_b] = bi;
     idx[ax_c] = ci;
 
     if (lvl == N_CHUNK_LVLS) {
-        idx.x += ubo.tlc_minxi;
-        idx.z += ubo.tlc_minzi;
+        idx.x -= ubo.tlc_minxi;
+        idx.z -= ubo.tlc_minzi;
     }
 
     // Indexing scheme is x + y * N^2 + z * N so that array for top level chunks (which have y length = 1) is contiguous
     return idx.x + idx.y * CHUNK_SIZE * CHUNK_SIZE + idx.z * CHUNK_SIZE;
 }
 
-uint global_index(uint rel_idx, uint tl_chunk_idx, uint lvl) {
-    // If current level is top level, rel_idx tells us our new top level chunk
-    if (lvl == N_CHUNK_LVLS) {
-        return tlci.indices[rel_idx/4][rel_idx%4];
-    }
-    // Else, rel_idx is relative to our top level chunk
-    uint tl_chunk_idx_incr = 1;
-    for (uint lvli = N_CHUNK_LVLS; lvli > lvl; lvli--) {
-        tl_chunk_idx_incr *= CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
-    }
-    return tl_chunk_idx * tl_chunk_idx_incr + rel_idx;
-}
-
-Material material_at_index(uint voxel_idx) {
+Material material_at_voxel_index(uint voxel_idx) {
     uvec4 mv4 = voxel_material_ids.indices[voxel_idx / MATERIALS_PER_VEC4];
     uint mint = mv4[(voxel_idx % MATERIALS_PER_VEC4) / MATERIALS_PER_INT];
     // N_MATERIAL_ID_BITS-bit int embedded in 32-bit int (mint)
@@ -149,16 +227,17 @@ Material material_at_index(uint voxel_idx) {
     return materials.defs[(mint << (32 - bits_to_shift - N_MATERIAL_ID_BITS)) >> bits_to_shift];
 }
 
-void set_ray_pos_and_normal(inout vec3 ray_origin, inout vec3 normal, uint first_ax, uint second_ax, uint ax_a, uint ai, float normal_dir, uint first_i, float first_p, float second_p, float first_d_da, float second_d_da) {
-    normal[first_ax] = normal_dir;
-    ray_origin[first_ax] = first_i;
-    float da = (float(first_i) - first_p) / first_d_da;
-    ray_origin[ax_a] = ai + da;
-    ray_origin[second_ax] = second_p + da * second_d_da;
+void set_ray_pos_on_bc_intersect(inout vec3 ray_origin, uint crossed_ax, uint other_ax, uint ax_a, uint ai, int a_neg, uint crossed_ax_i, float crossed_ax_p, uint crossed_ax_neg, float other_ax_p, float crossed_d_da, float other_d_da, uint lvl) {
+    ray_origin[crossed_ax] += crossed_ax_i + crossed_ax_neg;
+    // Amount we have to rewind a to get crossed_ax to the point where it crossed the border
+    float da = (crossed_ax_i + crossed_ax_neg - crossed_ax_p) / crossed_d_da;
+    ray_origin[ax_a] += ai + a_neg + da;  // if a has negative direction, add 1 to get to upper side of the block
+    ray_origin[other_ax] += other_ax_p + da * other_d_da;
+    ray_origin *= CHUNK_LVL_BLOCK_SIZE[lvl];
 }
 
-void bounce_ray(inout vec3 ray_dir, uint reflect_ax, inout vec3 color, inout vec3 light, inout uint rand_state, uint voxel_idx) {
-    Material m = material_at_index(voxel_idx);
+void bounce_ray(inout vec3 ray_dir, uint reflect_ax, inout vec3 color, inout vec3 light, inout uint rand_state, uint voxel_idx, vec3 normal) {
+    Material m = material_at_voxel_index(voxel_idx);
 
     light += m.emission_color * m.emission_strength * color;
 
@@ -167,72 +246,44 @@ void bounce_ray(inout vec3 ray_dir, uint reflect_ax, inout vec3 color, inout vec
         color *= m.specular_color;
     }
     else {
-        vec3 diffuse_dir = rand_dir(rand_state);
-        if ((diffuse_dir[reflect_ax] > 0) == (ray_dir[reflect_ax] > 0)) {
-            diffuse_dir[reflect_ax] *= -1;
-        }
-        ray_dir = diffuse_dir;
+        ray_dir = normalize(normal + rand_dir(rand_state));
         color *= m.color;
     }
 }
 
 
-// TEMP
-vec3 check_true(bool x) {
-    return x ? vec3(0, 1, 0) : vec3(1, 0, 0);
-}
-
-
 vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
-    vec3 color = vec3(0, 0, 0);
+    vec3 color = vec3(1, 1, 1);
     vec3 light = vec3(0, 0, 0);
     int lvl = 0;  // current chunk level
+    uint crossed_ax = 0;  // initialized as invalid value
+
+    // Set the 'block' array based on starting position
+    set_block_all_lvls(ray_origin, N_CHUNK_LVLS);
+
+    float strength_TEMP = 0; // TEMP
 
     // Trace ray over N_BOUNCES
     int bounce = 0;
-    for (int safety_limit = 0; safety_limit < 10000 && bounce < N_BOUNCES; safety_limit++) {
-
-        // Figure out where we are in the world
-        // NOTE: Top level chunks are indexed such that 0 is the player chunk. All others are 0,0,0 as the min point.
-
-        ivec2 tl_chunk = ivec2(floor(ray_origin.xz / CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS])); // current top level chunk
-        uint idx_to_look_up = tl_chunk.x - ubo.tlc_minxi + (tl_chunk.y - ubo.tlc_minzi) * RENDER_N_TLCHUNKS;
-        uint tl_chunk_idx = tlci.indices[idx_to_look_up/4][idx_to_look_up%4];
-
-        uint chunk_start_idx = 0;  // first index of this chunk at the current level within the current top level chunk
-        // Find chunk_start_idx. This loop will not do anything if currently at top level
-        for (int lvli = int(N_CHUNK_LVLS-1); lvli > lvl; lvli--) {
-            // Get point relative to current chunk
-            uvec3 chunk_start_pt = uvec3(ivec3(floor(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvli])) % CHUNK_SIZE);
-            chunk_start_idx += chunk_start_pt.x + chunk_start_pt.y * CHUNK_SIZE * CHUNK_SIZE + chunk_start_pt.z * CHUNK_SIZE;
-
-            // each index at the next (higher) level corresponds to CHUNK_SIZE^3 indices at this one.
-            chunk_start_idx *= CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
-        }
+    for (int safety_limit = 0; safety_limit < 100 && bounce < N_BOUNCES; safety_limit++) {
+        uint chunk_botleft_idx = chunk_botleft_index(lvl);
+        ivec3 chunk_botleft_blk = chunk_abs_botleft_block(lvl);
 
         // Establish search boundaries based on current chunk lvl
 
-        ivec3 min_pt;
+        ivec3 min_pt = ivec3(-1, -1, -1);
         ivec3 max_pt;
 
         if (lvl == N_CHUNK_LVLS) {
-            min_pt = ivec3(ubo.tlc_minxi, 0, ubo.tlc_minzi);
-            max_pt = ivec3(ubo.tlc_minxi + RENDER_N_TLCHUNKS, 0, ubo.tlc_minzi + RENDER_N_TLCHUNKS);
+            max_pt = ivec3(RENDER_N_TLCHUNKS, 1, RENDER_N_TLCHUNKS);
         }
         else {
-            min_pt = ivec3(0, 0, 0);
             max_pt = ivec3(int(CHUNK_SIZE), int(CHUNK_SIZE), int(CHUNK_SIZE));
         }
 
         // Get absolute and relative position
         vec3 abs_pos = ray_origin / CHUNK_LVL_BLOCK_SIZE[lvl];
-        vec3 pos;  // position relative to current chunk in units of current level
-        if (lvl == N_CHUNK_LVLS) {
-            pos = abs_pos - ivec3(floor(ubo.eye / CHUNK_LVL_BLOCK_SIZE[lvl]));
-        }
-        else {
-            pos = abs_pos - floor(abs_pos / CHUNK_LVL_BLOCK_SIZE[lvl+1]) * CHUNK_LVL_BLOCK_SIZE[lvl+1];
-        }
+        vec3 pos = abs_pos - chunk_botleft_blk;  // Same units as block[lvl] but specific float position rather than int position of block we are currently at
 
         //////////////////////////////
         // Search for intersections //
@@ -259,145 +310,325 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
         // Traverse grid until hit a present voxel (a true value in the bitmask)
 
-        int ai = int(floor(pos[ax_a])); // TODO: This might break due to floating point error. If a ray is coming from another chunk in the negative a direction
         int a_dir = ray_dir[ax_a] > 0 ? 1 : -1;
+        int a_neg = int(a_dir < 0);
+        int ai = block[lvl][ax_a];
         float a_normal_dir = -float(a_dir);
+        // ray_origin should be within the bounds of block[lvl][ax_a] (AKA ai) or else something else has messed up.
+        // So, a_floored_amt should always be <= 1
+        // Also, if a_dir is negative then we need to add 1 because we are at the 'top' (larger a) side of block ai
+        float a_floored_amt = pos[ax_a] - (ai + a_neg);
 
         float db_da = ray_dir[ax_b] / ray_dir[ax_a];
         float dc_da = ray_dir[ax_c] / ray_dir[ax_a];
-        float b_normal_dir = db_da > 0 ? -1 : 1;
-        float c_normal_dir = dc_da > 0 ? -1 : 1;
+        int b_neg = int(ray_dir[ax_b] < 0);
+        int c_neg = int(ray_dir[ax_c] < 0);
+        float b_normal_dir = bool(b_neg) ? -1 : 1;
+        float c_normal_dir = bool(c_neg) ? -1 : 1;
 
-        float b = pos[ax_b];
+        float b = pos[ax_b] - db_da * a_floored_amt;
+        int bi = block[lvl][ax_b];
         float last_b = b;
         int last_bi = int(floor(last_b));
-        float c = pos[ax_c];
+        float c = pos[ax_c] - dc_da * a_floored_amt;
+        int ci = block[lvl][ax_c];
         float last_c = c;
         int last_ci = int(floor(last_c));
+
+        ///////////////////////  DEBUG  ///////////////////////////
+        if (ai < 0 || ai >= CHUNK_SIZE) {
+            return vec3(0, 0, 1) * (lvl + 1)/3.0;
+        }
+        if (bi < 0 || bi >= CHUNK_SIZE) {
+            return vec3(0, 0, 1) * (lvl + 1)/3.0;
+        }
+        if (ci < 0 || ci >= CHUNK_SIZE) {
+            return vec3(0, 0, 1) * (lvl + 1)/3.0;
+        }
+
+        if ((abs(a_floored_amt) > 1.001) || (abs(pos[ax_b] - (block[lvl][ax_b] + b_neg)) > 1.01) || (abs(pos[ax_c] - (block[lvl][ax_c] + c_neg)) > 1.01)) {
+            return vec3(1, 0, 0.3);
+        }
+        ///////////////////////   END   ///////////////////////////
 
         bool hit = false;
         uint rel_idx;
         uint global_idx;
         uint reflect_axis;
+        vec3 normal = vec3(0, 0, 0);
+        bool c_ib;
+        bool b_ib;
+        uint oob_ax = ax_a;
+
+        // All branches set a new ray_origin and would start by doing this, so pulled it out and put it here.
+        ray_origin = vec3(chunk_botleft_blk);
+
+        // Process the block we start in (this is a special case where we need to check how we got here)
+        if (crossed_ax == ax_a) {
+            // Don't need to do anything, first iteration will do the right thing
+        }
+        else {
+            rel_idx = grid_index(ai, bi, ci, ax_a, ax_b, ax_c, lvl);
+            if (is_true_in_mask(chunk_botleft_idx + rel_idx, lvl)) {
+                // Hit!
+                hit = true;
+
+                // Don't need to change block because we didn't move
+
+                if (crossed_ax == ax_b) {
+                    normal[ax_b] = b_normal_dir;
+                    set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
+                    if (lvl > 0) {
+                        block[lvl-1][ax_b] = b_neg * int(CHUNK_SIZE-1);
+                    }
+                }
+                else {
+                    normal[ax_c] = c_normal_dir;
+                    set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
+                    if (lvl > 0) {
+                        block[lvl-1][ax_c] = c_neg * int(CHUNK_SIZE-1);
+                    }
+                }
+
+            }
+            else {
+                // We already checked the first block so step forward one
+                last_bi = bi;
+                last_ci = ci;
+                last_b = b;
+                last_c = c;
+
+                ai += a_dir;
+                b += db_da * a_dir;
+                c += dc_da * a_dir;
+                bi = int(floor(b));
+                ci = int(floor(c));
+            }
+        }
 
         // March ray with step size that increases value for axis a by 1 each step
-        for (; ai <= max_pt[ax_a] && ai >= min_pt[ax_a]; ai += a_dir) {
-            b += db_da;
-            c += dc_da;
-            int bi = int(floor(b));
-            int ci = int(floor(c));
+        if (!hit) {  // if we didn't hit the starting block, search all other intersecting blocks
+            for (; ai <= max_pt[ax_a] && ai >= min_pt[ax_a]; ai += a_dir) {
+                strength_TEMP += 1.0 / 12; // TEMP
 
-            bool b_crossed = bi != last_bi;
-            bool c_crossed = ci != last_ci;
-            bool b_ib = bi <= max_pt[ax_b];  // is b still in bounds
-            bool c_ib = ci <= max_pt[ax_c];  // is c still in bounds
+                bool b_crossed = bi != last_bi;
+                bool c_crossed = ci != last_ci;
+                b_ib = bi < max_pt[ax_b] && bi > min_pt[ax_b];  // is b still in bounds
+                c_ib = ci < max_pt[ax_c] && ci > min_pt[ax_c];  // is c still in bounds
 
-            // Check first possible voxel location, in the case where we cross all three axes, the first voxel
-            // intersected is determined by which axis we cross first.
-            if (b_crossed && c_crossed) {
-                // Whether crossed axis b before crossing axis c, if true check intersect voxel [a-1, bi, last_ci] else [a-1, last_bi, ci]
-                bool b_first = (bi - last_b) / db_da < (ci - last_c) / dc_da;
-                bool check;
-                if (b_first) { check = b_ib; }
-                else { check = c_ib; }
+                bool b_first;
 
-                if (check) {
-                    rel_idx = grid_index(ai-1, b_first ? bi : last_bi, b_first ? last_ci : ci, ax_a, ax_b, ax_c, lvl);
-                    global_idx = global_index(chunk_start_idx + rel_idx, tl_chunk_idx, lvl);
+                // Check first possible voxel location, in the case where we cross all three axes, the first voxel
+                // intersected is determined by which axis we cross first.
+                if (b_crossed && c_crossed) {
+                    // Whether crossed axis b before crossing axis c, if true check intersect voxel [a-a_dir, bi, last_ci] else [a-a_dir, last_bi, ci]
+                    b_first = abs((bi + b_neg - last_b) / db_da) < abs((ci + c_neg - last_c) / dc_da);
+                    if ((b_first && b_ib) || (!b_first && c_ib)) {
+                        rel_idx = grid_index(ai - a_dir, b_first ? bi : last_bi, b_first ? last_ci : ci, ax_a, ax_b, ax_c, lvl);
+                        global_idx = chunk_botleft_idx + rel_idx;
+
+                        if (is_true_in_mask(global_idx, lvl)) {
+                            // Hit!
+                            hit = true;
+
+                            // Update ray_origin for hit point
+                            block[lvl][ax_a] = ai - a_dir;
+                            if (b_first) {
+                                // [a-a_dir, bi, last_ci], crossed b
+                                normal[ax_b] = b_normal_dir;
+                                crossed_ax = ax_b;
+                                reflect_axis = ax_b;
+                                set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
+                                block[lvl][ax_b] = bi;
+                                block[lvl][ax_c] = last_ci;
+                                if (lvl > 0) {
+                                    set_block_all_lvls(ray_origin, lvl - 1);
+                                    block[lvl - 1][ax_b] = b_neg * int(CHUNK_SIZE-1);
+                                }
+                            }
+                            else {
+                                // [a-a_dir, last_bi, ci], crossed c
+                                normal[ax_c] = c_normal_dir;
+                                crossed_ax = ax_c;
+                                reflect_axis = ax_c;
+                                set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
+                                block[lvl][ax_b] = last_bi;
+                                block[lvl][ax_c] = ci;
+                                if (lvl > 0) {
+                                    set_block_all_lvls(ray_origin, lvl - 1);
+                                    block[lvl - 1][ax_c] = c_neg * int(CHUNK_SIZE-1);
+                                }
+                            }
+
+                            break;
+                        }
+                    }
+                }
+                else if (b_crossed) { b_first = false; }
+                else if (c_crossed) { b_first = true; }
+
+                // If we went out of bounds in either b axis or c axiz, set ray pos to where it crossed and break
+                if (!b_ib && (c_ib || !c_crossed || b_first)) {
+                    set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
+                    oob_ax = ax_b;
+                    crossed_ax = ax_b;
+                    break;
+                }
+                if (!c_ib) {
+                    set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
+                    oob_ax = ax_c;
+                    crossed_ax = ax_c;
+                    break;
+                }
+
+                if (b_crossed || c_crossed) {
+                    // check intersect voxel [a-a_dir, bi, ci]
+                    rel_idx = grid_index(ai - a_dir, bi, ci, ax_a, ax_b, ax_c, lvl);
+                    global_idx = chunk_botleft_idx + rel_idx;
+
                     if (is_true_in_mask(global_idx, lvl)) {
                         // Hit!
                         hit = true;
 
                         // Update ray_origin for hit point
-                        vec3 normal = vec3(0, 0, 0);
-                        int da;
+                        // Reusing b_first here (with augmented meaning) to determine which axis was crossed for this check.
+                        reflect_axis = b_first ? ax_c : ax_b;
                         if (b_first) {
-                            set_ray_pos_and_normal(ray_origin, normal, ax_b, ax_c, ax_a, ai, b_normal_dir, bi, b, c, db_da, dc_da);
+                            // crossed c
+                            crossed_ax = ax_c;
+                            reflect_axis = ax_c;
+                            normal[ax_c] = c_normal_dir;
+                            set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
+                            if (lvl > 0) {
+                                set_block_all_lvls(ray_origin, lvl - 1);
+                                block[lvl - 1][ax_c] = c_neg * int(CHUNK_SIZE-1);
+                            }
                         }
                         else {
-                            set_ray_pos_and_normal(ray_origin, normal, ax_c, ax_b, ax_a, ai, c_normal_dir, ci, c, b, dc_da, db_da);
+                            // crossed b
+                            crossed_ax = ax_b;
+                            reflect_axis = ax_b;
+                            normal[ax_b] = b_normal_dir;
+                            set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
+                            if (lvl > 0) {
+                                set_block_all_lvls(ray_origin, lvl - 1);
+                                block[lvl - 1][ax_b] = b_neg * int(CHUNK_SIZE-1);
+                            }
                         }
+                        block[lvl][ax_a] = ai - a_dir;
+                        block[lvl][ax_b] = bi;
+                        block[lvl][ax_c] = ci;
 
-                        reflect_axis = b_first ? ax_b : ax_c;
                         break;
                     }
                 }
-            }
 
-            if (!b_ib || !c_ib) { break; }
-            else if (b_crossed || c_crossed) {
-                // check intersect voxel [a-1, bi, ci]
-                rel_idx = grid_index(ai-1, bi, ci, ax_a, ax_b, ax_c, lvl);
-                global_idx = global_index(chunk_start_idx + rel_idx, tl_chunk_idx, lvl);
+                if (ai < max_pt[ax_a] && ai > min_pt[ax_a]) {
+                    // check intersect voxel [ai, bi, ci]
 
-                if (is_true_in_mask(global_idx, lvl)) {
-                    // Hit!
-                    hit = true;
+                    rel_idx = grid_index(ai, bi, ci, ax_a, ax_b, ax_c, lvl);
+                    global_idx = chunk_botleft_idx + rel_idx;
 
-                    // Update ray_origin for hit point
-                    vec3 normal = vec3(0, 0, 0);
-                    int da;
-                    if (b_crossed) {
-                        set_ray_pos_and_normal(ray_origin, normal, ax_b, ax_c, ax_a, ai, b_normal_dir, bi, b, c, db_da, dc_da);
+                    if (is_true_in_mask(global_idx, lvl)) {
+                        // Hit!
+                        hit = true;
+
+                        reflect_axis = ax_a;
+                        normal[ax_a] = a_normal_dir;
+                        crossed_ax = ax_a;
+                        ray_origin[ax_a] += ai + a_neg;
+                        ray_origin[ax_b] += b;
+                        ray_origin[ax_c] += c;
+                        ray_origin *= CHUNK_LVL_BLOCK_SIZE[lvl];
+
+                        block[lvl][ax_a] = ai;
+                        block[lvl][ax_b] = bi;
+                        block[lvl][ax_c] = ci;
+
+                        if (lvl > 0) {
+                            set_block_all_lvls(ray_origin, lvl - 1);
+                            block[lvl - 1][ax_a] = a_neg * int(CHUNK_SIZE-1);
+                        }
+
+                        break;
                     }
-                    else {
-                        set_ray_pos_and_normal(ray_origin, normal, ax_c, ax_b, ax_a, ai, c_normal_dir, ci, c, b, dc_da, db_da);
-                    }
-
-                    reflect_axis = b_crossed ? ax_b : ax_c;
-                    break;
                 }
-            }
 
-            if (ai < max_pt[ax_a]) {
-                // check intersect voxel [ai, bi, ci]
-                rel_idx = grid_index(ai, bi, ci, ax_a, ax_b, ax_c, lvl);
-                global_idx = global_index(chunk_start_idx + rel_idx, tl_chunk_idx, lvl);
-                if (ai == 5 && bi == 1 && ci == 6) {
-                    return check_true(material_at_index(global_idx).color.x > 0);
-                    return check_true(is_true_in_mask(global_idx, lvl));
-                }
-                if (is_true_in_mask(global_idx, lvl)) {
-                    // Hit!
-                    hit = true;
+                last_bi = bi;
+                last_ci = ci;
+                last_b = b;
+                last_c = c;
 
-                    vec3 normal = vec3(0, 0, 0);
-                    normal[ax_a] = a_normal_dir;
-                    ray_origin = vec3(ai, bi, ci);
-
-                    break;
-                }
+                b += db_da * a_dir;
+                c += dc_da * a_dir;
+                bi = int(floor(b));
+                ci = int(floor(c));
             }
         }
 
         if (hit) {
-            // Hit a block -- ray position was already set to new location
+            // Hit a block -- ray position and block already set
             if (lvl > 0) {
                 lvl--;
             }
             else {
-                return vec3(0, 1, 0);
-                bounce_ray(ray_dir, reflect_axis, color, light, rand_state, global_idx);
+                return (vec3(amod(ivec3(floor(ray_origin)), 64)) / 85.0 + 0.2);
+                // When we are at lvl == 0, global_idx is an individual voxel index (rather than a subchunk at higher lvls)
+                bounce_ray(ray_dir, reflect_axis, color, light, rand_state, global_idx, normal);
                 bounce++;
             }
         }
         else {
-            // Did not hit any blocks in this chunk -- ray position was not yet updated
+            // Did not hit any blocks in this chunk
             if (lvl < N_CHUNK_LVLS) {
-                return vec3(0.5, 0, 0.5);
-                // We hit nothing in this subchunk, go back to higher level acc structure
+                // We hit nothing in this subchunk, go back to higher level chunk
+                // (ray position and block have not yet been updated)
                 // TOOD: Check if we can skip a level and go up 2
+
+                if (oob_ax == ax_a) {
+                    // We reached the back of the chunk without crossing b or c axis chunk borders.
+                    // Need to roll back by an ai=1 step because we passed max_pt or min_pt and didn't update b/c on the
+                    // last step.
+                    ai -= a_dir;
+                    b -= db_da * a_dir;
+                    c -= dc_da * a_dir;
+
+                    crossed_ax = ax_a;
+
+                    ray_origin[ax_a] += ai + a_neg;
+                    ray_origin[ax_b] += b;
+                    ray_origin[ax_c] += c;
+                    ray_origin *= CHUNK_LVL_BLOCK_SIZE[lvl];
+                    // If this is false, then we already set ray_origin.
+                }
+
+                // Set block based on new ray_origin position
+                set_block_all_lvls(ray_origin, lvl+1);
+                // ray_origin will be near a border on oob_ax so make sure the block is the right one and we don't check
+                // this same chunk again, leading to an infinite loop
+                if ((ray_dir[oob_ax] > 0 && block[lvl][oob_ax] == CHUNK_SIZE-1) || (ray_dir[oob_ax] < 0 && block[lvl][oob_ax] == 0)) {
+                    step_block(oob_ax, ray_dir[oob_ax], lvl);
+                }
                 lvl++;
-                ray_origin[ax_a] = ai - 1;
-                ray_origin[ax_b] = b;
-                ray_origin[ax_c] = c;
+
+                ///////////////////////  DEBUG  ///////////////////////////
+                vec3 diff = abs(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvl] - abs_block(lvl));
+                if (diff.x > 1.01) {
+                    return vec3(1, 0, 0);
+                }
+                if (diff.y > 1.01) {
+                    return vec3(0, 1, 0);
+                }
+                if (diff.z > 1.01) {
+                    return vec3(0, 0, 1);
+                }
+                ///////////////////////   END   ///////////////////////////
             }
             else {
                 // Hit skybox
-                return vec3(0, 0, 1);
-                float strength = (dot(ray_dir, ubo.sun_dir) + 1) * (MAX_SUN_EMISSION - MIN_SUM_EMISSION) / 2 + MIN_SUM_EMISSION;
+                float strength = (dot(ray_dir, ubo.sun_dir) + 1) / 2 * (MAX_SUN_EMISSION - MIN_SUM_EMISSION) + MIN_SUM_EMISSION;
                 light += strength * SUN_COLOR * color;
-                break;
+                return light;
             }
         }
     }
@@ -415,7 +646,10 @@ void main() {
     ivec2 win_size = imageSize(image);
 
     // TEMP ACCESS ALL THE BOUND STRUCTS
-    Material a = material_at_index(0);
+    Material a = materials.defs[0];
+    uint e = voxel_material_ids.indices[0][0];
+    vec3 eye = camera.eye;
+    uint x = ubo.tlc_minxi;
     uvec4 tlc = tlci.indices[0];
     uvec4 b = chunk_bitmasks0.mask[0];
     uvec4 c = chunk_bitmasks1.mask[0];
@@ -429,8 +663,10 @@ void main() {
         uint rand_state = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * win_size.x + ubo.time * win_size.x * win_size.y;
         // TODO: Randomly offset u, v based on random_seed
 
-        vec3 ray_origin = ubo.focal_pt + ubo.right_dir * uv.x + ubo.up_dir * -uv.y;
-        vec3 ray_dir = normalize(ray_origin - ubo.eye);
+        vec3 ray_origin = camera.viewport_center + camera.right_dir * uv.x + camera.up_dir * -uv.y;
+        vec3 ray_dir = normalize(ray_origin - camera.eye);
+        // Put ray origin into coords with origin at botleft of loaded area
+        ray_origin -= vec3(ubo.tlc_minxi, 0, ubo.tlc_minzi) * CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS];
 
         light += trace_ray(ray_origin, ray_dir, rand_state);
         break;
