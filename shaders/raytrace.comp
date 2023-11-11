@@ -18,9 +18,10 @@ const uint MATERIALS_PER_VEC4 = 128 / N_MATERIAL_ID_BITS;
 const uint MATERIALS_PER_INT = 32 / N_MATERIAL_ID_BITS;
 const uint N_MATERIALS = 1 << N_MATERIAL_ID_BITS;
 
-const float MAX_SUN_EMISSION = 1;
-const float MIN_SUM_EMISSION = 0.25;
-const vec3 SUN_COLOR = vec3(1.0, 1.0, 1.0);
+const float MAX_SUN_EMISSION = 1.5;
+const float MIN_SUM_EMISSION = 0.75;
+const vec3 SUN_COLOR = vec3(1.0, 0.98, 0.9);
+const vec3 SKY_COLOR = vec3(0.6, 0.78, 0.98);
 
 
 // Output image
@@ -116,12 +117,46 @@ vec3 rand_dir(inout uint state) {
 // TODO: I don't understand why vec3 block[...] doesn't work, this is a workaround. Might be a better way.
 int block[N_CHUNK_LVLS+1][3];
 
+ivec3 abs_block(uint lvl) {
+    // Get the absolute position of the current block at lvl in lvl units
+    ivec3 pt = ivec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]);
+    if (lvl == 2) {
+        return pt;
+    }
+    for (int lvli = int(N_CHUNK_LVLS)-1; lvli >= lvl; lvli--) {
+        pt *= int(CHUNK_SIZE);
+        pt += ivec3(block[lvli][0], block[lvli][1], block[lvli][2]);
+    }
+
+    return pt;
+}
+
+void set_block_tlc(vec3 ray_origin) {
+    ivec3 tlc = ivec3(floor(ray_origin / CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS]));
+    block[N_CHUNK_LVLS][0] = tlc.x;
+    block[N_CHUNK_LVLS][1] = tlc.y;
+    block[N_CHUNK_LVLS][2] = tlc.z;
+}
+
 void set_block_all_lvls(vec3 ray_origin, uint at_lvl_and_below) {
-    for (int lvli = int(at_lvl_and_below); lvli >= 0; lvli--) {
-        ivec3 pt = amod(ivec3(floor(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvli])), CHUNK_SIZE);
-        block[lvli][0] = pt.x;
-        block[lvli][1] = pt.y;
-        block[lvli][2] = pt.z;
+    if (at_lvl_and_below >= N_CHUNK_LVLS) {
+        set_block_tlc(ray_origin);
+    }
+
+    ivec3 pt = ivec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]);
+    for (int lvli = int(N_CHUNK_LVLS-1); lvli >= 0; lvli--) {
+        pt *= int(CHUNK_SIZE);
+
+        if (lvli <= at_lvl_and_below) {
+            ivec3 pti = clamp(ivec3(floor(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvli])) - pt, ivec3(0), ivec3(int(CHUNK_SIZE - 1)));
+            pt += pti;
+            block[lvli][0] = pti.x;
+            block[lvli][1] = pti.y;
+            block[lvli][2] = pti.z;
+        }
+        else {
+            pt += ivec3(block[lvli][0], block[lvli][1], block[lvli][2]);
+        }
     }
 }
 
@@ -144,7 +179,7 @@ void step_block(uint ax, float ax_dir, uint lvl) {
         block[lvli+1][ax] += incr;
         block[lvli][ax] = val;
     }
-    for (int lvli = int(lvl)-1; lvli >= 0; lvli--) {
+    for (int lvli = int(lvl) - 1; lvli >= 0; lvli--) {
         block[lvli][ax] = val;
     }
 }
@@ -170,20 +205,6 @@ uint chunk_botleft_index(uint lvl) {
     }
 
     return idx * CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
-}
-
-ivec3 abs_block(uint lvl) {
-    // Get the absolute position of the current block at lvl in lvl units
-    ivec3 pt = ivec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]);
-    if (lvl == 2) {
-        return pt;
-    }
-    for (int lvli = int(N_CHUNK_LVLS)-1; lvli >= lvl; lvli--) {
-        pt *= int(CHUNK_SIZE);
-        pt += ivec3(block[lvli][0], block[lvli][1], block[lvli][2]);
-    }
-
-    return pt;
 }
 
 ivec3 chunk_abs_botleft_block(uint lvl) {
@@ -256,7 +277,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
     vec3 color = vec3(1, 1, 1);
     vec3 light = vec3(0, 0, 0);
     int lvl = 0;  // current chunk level
-    uint crossed_ax = 0;  // initialized as invalid value
+    uint crossed_ax = 0;
 
     // Set the 'block' array based on starting position
     set_block_all_lvls(ray_origin, N_CHUNK_LVLS);
@@ -336,17 +357,18 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
         int last_ci = int(floor(last_c));
 
         ///////////////////////  DEBUG  ///////////////////////////
+        // Don't care to check these things if we are out of bounds
         if (ai < 0 || ai >= CHUNK_SIZE) {
-            return vec3(0, 0, 1) * (lvl + 1)/3.0;
+            return vec3(0, 0, 1) * (lvl + 1) / 3.0;
         }
         if (bi < 0 || bi >= CHUNK_SIZE) {
-            return vec3(0, 0, 1) * (lvl + 1)/3.0;
+            return vec3(0, 0, 1) * (lvl + 1) / 3.0;
         }
         if (ci < 0 || ci >= CHUNK_SIZE) {
-            return vec3(0, 0, 1) * (lvl + 1)/3.0;
+            return vec3(0, 0, 1) * (lvl + 1) / 3.0;
         }
 
-        if ((abs(a_floored_amt) > 1.001) || (abs(pos[ax_b] - (block[lvl][ax_b] + b_neg)) > 1.01) || (abs(pos[ax_c] - (block[lvl][ax_c] + c_neg)) > 1.01)) {
+        if ((abs(a_floored_amt) > 1.01) || (abs(pos[ax_b] - (block[lvl][ax_b] + b_neg)) > 1.01) || (abs(pos[ax_c] - (block[lvl][ax_c] + c_neg)) > 1.01)) {
             return vec3(1, 0, 0.3);
         }
         ///////////////////////   END   ///////////////////////////
@@ -373,23 +395,14 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                 // Hit!
                 hit = true;
 
-                // Don't need to change block because we didn't move
-
                 if (crossed_ax == ax_b) {
                     normal[ax_b] = b_normal_dir;
                     set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
-                    if (lvl > 0) {
-                        block[lvl-1][ax_b] = b_neg * int(CHUNK_SIZE-1);
-                    }
                 }
                 else {
                     normal[ax_c] = c_normal_dir;
                     set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
-                    if (lvl > 0) {
-                        block[lvl-1][ax_c] = c_neg * int(CHUNK_SIZE-1);
-                    }
                 }
-
             }
             else {
                 // We already checked the first block so step forward one
@@ -406,8 +419,9 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
             }
         }
 
+        // If we didn't hit the starting block and we are in bounds of top level chunks, search all other intersecting blocks
         // March ray with step size that increases value for axis a by 1 each step
-        if (!hit) {  // if we didn't hit the starting block, search all other intersecting blocks
+        if (!hit) {
             for (; ai <= max_pt[ax_a] && ai >= min_pt[ax_a]; ai += a_dir) {
                 strength_TEMP += 1.0 / 12; // TEMP
 
@@ -441,10 +455,6 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                                 set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
                                 block[lvl][ax_b] = bi;
                                 block[lvl][ax_c] = last_ci;
-                                if (lvl > 0) {
-                                    set_block_all_lvls(ray_origin, lvl - 1);
-                                    block[lvl - 1][ax_b] = b_neg * int(CHUNK_SIZE-1);
-                                }
                             }
                             else {
                                 // [a-a_dir, last_bi, ci], crossed c
@@ -454,10 +464,9 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                                 set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
                                 block[lvl][ax_b] = last_bi;
                                 block[lvl][ax_c] = ci;
-                                if (lvl > 0) {
-                                    set_block_all_lvls(ray_origin, lvl - 1);
-                                    block[lvl - 1][ax_c] = c_neg * int(CHUNK_SIZE-1);
-                                }
+                            }
+                            if (lvl > 0) {
+                                set_block_all_lvls(ray_origin, lvl - 1);
                             }
 
                             break;
@@ -499,10 +508,6 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                             reflect_axis = ax_c;
                             normal[ax_c] = c_normal_dir;
                             set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
-                            if (lvl > 0) {
-                                set_block_all_lvls(ray_origin, lvl - 1);
-                                block[lvl - 1][ax_c] = c_neg * int(CHUNK_SIZE-1);
-                            }
                         }
                         else {
                             // crossed b
@@ -510,14 +515,13 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                             reflect_axis = ax_b;
                             normal[ax_b] = b_normal_dir;
                             set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
-                            if (lvl > 0) {
-                                set_block_all_lvls(ray_origin, lvl - 1);
-                                block[lvl - 1][ax_b] = b_neg * int(CHUNK_SIZE-1);
-                            }
                         }
                         block[lvl][ax_a] = ai - a_dir;
                         block[lvl][ax_b] = bi;
                         block[lvl][ax_c] = ci;
+                        if (lvl > 0) {
+                            set_block_all_lvls(ray_origin, lvl - 1);
+                        }
 
                         break;
                     }
@@ -547,7 +551,6 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
                         if (lvl > 0) {
                             set_block_all_lvls(ray_origin, lvl - 1);
-                            block[lvl - 1][ax_a] = a_neg * int(CHUNK_SIZE-1);
                         }
 
                         break;
@@ -566,13 +569,15 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
             }
         }
 
+        bool hit_skybox = false;
+
         if (hit) {
             // Hit a block -- ray position and block already set
             if (lvl > 0) {
                 lvl--;
             }
             else {
-                return (vec3(amod(ivec3(floor(ray_origin)), 64)) / 85.0 + 0.2);
+                return (vec3(amod(ivec3(floor(ray_origin)), 64)) / 85.0 + 0.2 * normal);
                 // When we are at lvl == 0, global_idx is an individual voxel index (rather than a subchunk at higher lvls)
                 bounce_ray(ray_dir, reflect_axis, color, light, rand_state, global_idx, normal);
                 bounce++;
@@ -611,25 +616,35 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                 }
                 lvl++;
 
+                if (block[2][0] < 0 || block[2][0] >= RENDER_N_TLCHUNKS || block[2][1] < 0 || block[2][1] >= 1 || block[2][2] < 0 || block[2][2] >= RENDER_N_TLCHUNKS) {
+                    hit_skybox = true;
+                }
+
                 ///////////////////////  DEBUG  ///////////////////////////
-                vec3 diff = abs(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvl] - abs_block(lvl));
-                if (diff.x > 1.01) {
-                    return vec3(1, 0, 0);
-                }
-                if (diff.y > 1.01) {
-                    return vec3(0, 1, 0);
-                }
-                if (diff.z > 1.01) {
-                    return vec3(0, 0, 1);
+                else {
+                    vec3 diff = abs(ray_origin / CHUNK_LVL_BLOCK_SIZE[lvl] - abs_block(lvl));
+                    if (diff.x > 1.01) {
+                        return vec3(1, 0.6, 0);
+                    }
+                    if (diff.y > 1.01) {
+                        return vec3(1, 0.6, 0);
+                    }
+                    if (diff.z > 1.01) {
+                        return vec3(1, 0.6, 0);
+                    }
                 }
                 ///////////////////////   END   ///////////////////////////
             }
             else {
-                // Hit skybox
-                float strength = (dot(ray_dir, ubo.sun_dir) + 1) / 2 * (MAX_SUN_EMISSION - MIN_SUM_EMISSION) + MIN_SUM_EMISSION;
-                light += strength * SUN_COLOR * color;
-                return light;
+                hit_skybox = true;
             }
+        }
+
+        if (hit_skybox) {
+            float d = dot(ray_dir, ubo.sun_dir);
+            float strength = (d + 1) / 2 * (MAX_SUN_EMISSION - MIN_SUM_EMISSION) + MIN_SUM_EMISSION;
+            light += strength * (d > 0.999 ? SUN_COLOR : SKY_COLOR) * color;
+            return light;
         }
     }
 
@@ -672,6 +687,6 @@ void main() {
         break;
     }
 
-//    light /= float(N_CASTS);
+    light /= float(N_CASTS);
     imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(light, 1));
 }
