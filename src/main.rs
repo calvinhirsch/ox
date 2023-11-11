@@ -2,7 +2,7 @@ use std::error::Error;
 use std::f32::consts::PI;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use std::time::{Instant, Duration};
+use std::time::{Instant, Duration, UNIX_EPOCH, SystemTime};
 
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
@@ -128,8 +128,8 @@ const MATERIALS: [Material; 4] = [
     Material {
         color: [0.8, 0.6, 0.6],
         specular_color: [0.0, 0.0, 0.0],
-        emission_color: [0.8, 0.6, 0.6],
-        emission_strength: 0.3,
+        emission_color: [0.8, 0.0, 0.0],
+        emission_strength: 0.7,
         specular_prob: 0.0,
     },
 ];
@@ -297,7 +297,7 @@ fn update_voxel(voxel_idx: [usize; N_CHUNK_LVLS+1], material_id: u8, vmi: &mut V
     let vmi_idx1 = voxel_idx[0]/16;
     let vmi_idx2 = (voxel_idx[0] / 4) % 4;
     let mut bytes = vmi[vmi_idx1].indices[vmi_idx2].to_le_bytes();
-    bytes[(voxel_idx[0] / 8) % 4] = material_id.to_le_bytes()[0];
+    bytes[(voxel_idx[0] / 4) % 4] = material_id.to_le_bytes()[0];
     vmi[vmi_idx1].indices[vmi_idx2] = u32::from_le_bytes(bytes);
 
     for (bitmask, idx) in bitmasks.iter_mut().zip( voxel_idx.iter()) {
@@ -434,7 +434,7 @@ fn main() {
         controller: CameraController::new(5., 1.),
     };
 
-    let ubo = Ubo {
+    let mut ubo = Ubo {
         sun_dir: [0.39036, 0.78072, 0.48795],
         tlc_minxi: -2,
         tlc_minzi: -2,
@@ -446,10 +446,10 @@ fn main() {
     for tlcx in -2..2 {
         for tlcy in -2..2 {
             for x in 0..TLC_SIZE as i32 {
-                for y in 0..1 { //(tlcx+tlcy + 4) {
+                for y in 0..(tlcx+tlcy + 5) {
                     for z in 0..TLC_SIZE as i32 {
                         match update_voxel(
-                            voxel_index(x + tlcx * TLC_SIZE as i32, y, z + tlcy * TLC_SIZE as i32, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+                            voxel_index(x + tlcx * TLC_SIZE as i32, y + if x % 12 == 0 { 1 } else { 0 }, z + tlcy * TLC_SIZE as i32, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
                             if x % 12 == 0 { 3 } else if z % 7 == 0 { 2 } else { 1 },
                             &mut vmi,
                             &mut chunk_bitmasks,
@@ -471,7 +471,7 @@ fn main() {
     // ).unwrap();
     update_voxel(
         voxel_index(1, 14, 3, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
-        1,
+        3,
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
@@ -483,7 +483,7 @@ fn main() {
     // ).unwrap();
     update_voxel(
         voxel_index(1, 15, 7, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
-        1,
+        2,
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
@@ -1061,7 +1061,9 @@ fn main() {
             let now = Instant::now();
             let dt = now - last_render_time;
             last_render_time = now;
+
             camera.apply_controller_updates(dt);
+            ubo.time = SystemTime::now().duration_since(UNIX_EPOCH.into()).unwrap().subsec_millis();
 
             // Wait for staging buffers to be available
 

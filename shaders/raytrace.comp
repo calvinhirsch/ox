@@ -1,8 +1,8 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : enable
 
-const uint N_BOUNCES = 16;
-const uint N_CASTS = 1;
+const uint N_BOUNCES = 5;
+const uint N_CASTS = 5;
 const uint CHUNK_SIZE = 8;  // Number of blocks in each chunk level
 const uint N_CHUNK_LVLS = 2;  // 2 means there are two chunk sizes (CHUNK_SIZE and CHUNK_SIZE**2) where the largest chunk size is the world height
 const uint RENDER_N_TLCHUNKS = 4;  // Render THIS x THIS top level chunks around player (assuming world is only 1 top level chunk high)
@@ -98,7 +98,7 @@ float rand(inout uint state) {
 }
 
 float rand_normal(inout uint state) {
-    // Thanks to https://stackoverflow.com/a/6178290
+    // Random value sampled from normal distribution (https://stackoverflow.com/a/6178290)
     float theta = 2.0 * 3.1415926 * rand(state);
     float rho = sqrt(float(-2 * log(rand(state))));
     return rho * cos(theta);
@@ -239,13 +239,18 @@ uint grid_index(uint ai, uint bi, uint ci, uint ax_a, uint ax_b, uint ax_c, uint
     return idx.x + idx.y * CHUNK_SIZE * CHUNK_SIZE + idx.z * CHUNK_SIZE;
 }
 
-Material material_at_voxel_index(uint voxel_idx) {
+uint material_id_at_voxel_index(uint voxel_idx) {
     uvec4 mv4 = voxel_material_ids.indices[voxel_idx / MATERIALS_PER_VEC4];
-    uint mint = mv4[(voxel_idx % MATERIALS_PER_VEC4) / MATERIALS_PER_INT];
+    uint subidx = (voxel_idx % MATERIALS_PER_VEC4) / MATERIALS_PER_INT;
+    uint mint = mv4[subidx];
     // N_MATERIAL_ID_BITS-bit int embedded in 32-bit int (mint)
     // Shift left to get rid of data to the left and then right to scale it properly
-    uint bits_to_shift = N_MATERIAL_ID_BITS * (voxel_idx / MATERIALS_PER_INT);
-    return materials.defs[(mint << (32 - bits_to_shift - N_MATERIAL_ID_BITS)) >> bits_to_shift];
+    return (mint << (32 - (subidx+1)*N_MATERIAL_ID_BITS)) >> (32 - N_MATERIAL_ID_BITS);
+}
+
+Material material_at_voxel_index(uint voxel_idx) {
+    uint id = material_id_at_voxel_index(voxel_idx);
+    return materials.defs[id];
 }
 
 void set_ray_pos_on_bc_intersect(inout vec3 ray_origin, uint crossed_ax, uint other_ax, uint ax_a, uint ai, int a_neg, uint crossed_ax_i, float crossed_ax_p, uint crossed_ax_neg, float other_ax_p, float crossed_d_da, float other_d_da, uint lvl) {
@@ -262,7 +267,7 @@ void bounce_ray(inout vec3 ray_dir, uint reflect_ax, inout vec3 color, inout vec
 
     light += m.emission_color * m.emission_strength * color;
 
-    if (rand(rand_state) > m.specular_prob) {
+    if (rand(rand_state) < m.specular_prob) {
         ray_dir[reflect_ax] *= -1;
         color *= m.specular_color;
     }
@@ -344,8 +349,8 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
         float dc_da = ray_dir[ax_c] / ray_dir[ax_a];
         int b_neg = int(ray_dir[ax_b] < 0);
         int c_neg = int(ray_dir[ax_c] < 0);
-        float b_normal_dir = bool(b_neg) ? -1 : 1;
-        float c_normal_dir = bool(c_neg) ? -1 : 1;
+        float b_normal_dir = bool(b_neg) ? 1 : -1;
+        float c_normal_dir = bool(c_neg) ? 1 : -1;
 
         float b = pos[ax_b] - db_da * a_floored_amt;
         int bi = block[lvl][ax_b];
@@ -391,15 +396,20 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
         }
         else {
             rel_idx = grid_index(ai, bi, ci, ax_a, ax_b, ax_c, lvl);
-            if (is_true_in_mask(chunk_botleft_idx + rel_idx, lvl)) {
+            global_idx = chunk_botleft_idx + rel_idx;
+            if (is_true_in_mask(global_idx, lvl)) {
                 // Hit!
                 hit = true;
 
                 if (crossed_ax == ax_b) {
+                    reflect_axis = ax_b;
+                    crossed_ax = ax_b;
                     normal[ax_b] = b_normal_dir;
                     set_ray_pos_on_bc_intersect(ray_origin, ax_b, ax_c, ax_a, ai, a_neg, bi, b, b_neg, c, db_da, dc_da, lvl);
                 }
                 else {
+                    reflect_axis = ax_c;
+                    crossed_ax = ax_c;
                     normal[ax_c] = c_normal_dir;
                     set_ray_pos_on_bc_intersect(ray_origin, ax_c, ax_b, ax_a, ai, a_neg, ci, c, c_neg, b, dc_da, db_da, lvl);
                 }
@@ -501,7 +511,6 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
                         // Update ray_origin for hit point
                         // Reusing b_first here (with augmented meaning) to determine which axis was crossed for this check.
-                        reflect_axis = b_first ? ax_c : ax_b;
                         if (b_first) {
                             // crossed c
                             crossed_ax = ax_c;
@@ -577,9 +586,14 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                 lvl--;
             }
             else {
-                return (vec3(amod(ivec3(floor(ray_origin)), 64)) / 85.0 + 0.2 * normal);
                 // When we are at lvl == 0, global_idx is an individual voxel index (rather than a subchunk at higher lvls)
+//                return vec3((global_idx % 64) / 64.0);
                 bounce_ray(ray_dir, reflect_axis, color, light, rand_state, global_idx, normal);
+
+                // Currently, 'block' is indicating the voxel we just bounced off of. Step it towards the direction
+                // we are reflecting to
+                step_block(reflect_axis, ray_dir[reflect_axis], lvl);
+
                 bounce++;
             }
         }
@@ -675,7 +689,7 @@ void main() {
     const vec2 uv = (vec2(gl_GlobalInvocationID.xy) / vec2(win_size)) * 2.0 - 1.0;
 
     for (uint cast_i = 0; cast_i < N_CASTS; cast_i++) {
-        uint rand_state = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * win_size.x + ubo.time * win_size.x * win_size.y;
+        uint rand_state = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * win_size.x + (ubo.time + cast_i) * win_size.x * win_size.y;
         // TODO: Randomly offset u, v based on random_seed
 
         vec3 ray_origin = camera.viewport_center + camera.right_dir * uv.x + camera.up_dir * -uv.y;
@@ -684,7 +698,6 @@ void main() {
         ray_origin -= vec3(ubo.tlc_minxi, 0, ubo.tlc_minzi) * CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS];
 
         light += trace_ray(ray_origin, ray_dir, rand_state);
-        break;
     }
 
     light /= float(N_CASTS);
