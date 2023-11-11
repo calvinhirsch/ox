@@ -99,7 +99,7 @@ struct Material {
     specular_prob: f32,
 }
 
-const MATERIALS: [Material; 4] = [
+const MATERIALS: [Material; 5] = [
     // Air
     Material {
         color: [0.0, 0.0, 0.0],
@@ -128,8 +128,16 @@ const MATERIALS: [Material; 4] = [
     Material {
         color: [0.8, 0.6, 0.6],
         specular_color: [0.0, 0.0, 0.0],
-        emission_color: [0.8, 0.0, 0.0],
-        emission_strength: 0.7,
+        emission_color: [1.0, 0.0, 0.0],
+        emission_strength: 1.0,
+        specular_prob: 0.0,
+    },
+    // Some light emitting block 2
+    Material {
+        color: [0.8, 0.6, 0.6],
+        specular_color: [0.0, 0.0, 0.0],
+        emission_color: [0.0, 1.0, 0.0],
+        emission_strength: 1.0,
         specular_prob: 0.0,
     },
 ];
@@ -1063,7 +1071,6 @@ fn main() {
             last_render_time = now;
 
             camera.apply_controller_updates(dt);
-            ubo.time = SystemTime::now().duration_since(UNIX_EPOCH.into()).unwrap().subsec_millis();
 
             // Wait for staging buffers to be available
 
@@ -1072,10 +1079,15 @@ fn main() {
             }
 
             // Transfer to staging buffers
+            // TODO: Parallelize this (at least)
 
             {
                 let mut camera_buffer_content = camera_staging_buffer.write().unwrap();
                 camera_buffer_content.update(&camera, Point3::new(0., 0., 0.));
+            }
+            {
+                let mut ubo_buffer_content = ubo_staging_buffer.write().unwrap();
+                ubo_buffer_content.time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_millis();
             }
 
             // Wait for the GPU to be done reading from device local buffer from previous frame (they are shared across frames)
