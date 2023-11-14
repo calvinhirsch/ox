@@ -1,2 +1,8 @@
 TODO:
- - Added BufferUsage::UNIFORM_BUFFER to all staging buffers which is probably unnecessary, remove them once working
+ - Test if safety limit is ever being reached--if so, could have huge performance impact. Try setting it super high and checking performance
+
+ Nvidia Nsight profiling metric descriptions:
+ https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-decoder
+
+ Talk on how to use Nsight to optimize memory-bound kernels:
+ https://www.nvidia.com/en-us/on-demand/session/gtcspring21-s32089/

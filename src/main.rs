@@ -34,7 +34,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{CursorGrabMode, Window, WindowBuilder};
 use winit::dpi::PhysicalSize;
 
-use cgmath::{Deg, Point3, Rad};
+use cgmath::{Point3, Rad};
 use itertools::Itertools;
 use num_traits::PrimInt;
 
@@ -50,7 +50,8 @@ const CHUNK_BLOCK_SIZES: [usize; N_CHUNK_LVLS+1] = [
     CHUNK_SIZE*CHUNK_SIZE,
 ];
 const RENDER_N_TLCS: usize = 4;
-const SUBGROUP_SIZE: u32 = 8;
+const SUBGROUP_WIDTH: u32 = 8;
+const SUBGROUP_HEIGHT: u32 = 8;
 
 const N_CHUNKS: [usize; N_CHUNK_LVLS+1] = [
     CHUNK_SIZE.pow(6) * RENDER_N_TLCS.pow(2),
@@ -87,58 +88,77 @@ impl Display for OutOfBoundsErr {
 #[derive(BufferContents, Debug, Clone)]
 #[repr(C)]
 struct Material {
-    // #[format(R32G32B32_SFLOAT)]
     color: [f32; 3],
-    // #[format(R32G32B32_SFLOAT)]
+    _pad1: f32,
     specular_color: [f32; 3],
-    // #[format(R32G32B32_SFLOAT)]
+    _pad2: f32,
     emission_color: [f32; 3],
-    // #[format(R32_SFLOAT)]
     emission_strength: f32,
-    // #[format(R32_SFLOAT)]
-    specular_prob: f32,
+    specular_prob_perpendicular: f32,
+    specular_prob_parallel: f32,
+    _pad3: [f32; 2],
 }
 
 const MATERIALS: [Material; 5] = [
     // Air
     Material {
         color: [0.0, 0.0, 0.0],
+        _pad1: 0.,
         specular_color: [0.0, 0.0, 0.0],
+        _pad2: 0.,
         emission_color: [0.0, 0.0, 0.0],
         emission_strength: 0.0,
-        specular_prob: 0.0,
+        specular_prob_perpendicular: 0.0,
+        specular_prob_parallel: 0.0,
+        _pad3: [0., 0.],
     },
     // Some matte block
     Material {
         color: [0.6, 0.6, 0.6],
-        specular_color: [0.0, 0.0, 0.0],
+        _pad1: 0.,
+        specular_color: [1.0, 1.0, 1.0],
+        _pad2: 0.,
         emission_color: [0.0, 0.0, 0.0],
         emission_strength: 0.0,
-        specular_prob: 0.0,
+        specular_prob_perpendicular: 0.0,
+        specular_prob_parallel: 0.25,
+        _pad3: [0., 0.],
     },
     // Some reflective block
     Material {
         color: [0.6, 0.6, 0.6],
+        _pad1: 0.,
         specular_color: [1.0, 1.0, 1.0],
+        _pad2: 0.,
         emission_color: [0.0, 0.0, 0.0],
         emission_strength: 0.0,
-        specular_prob: 0.9,
+        specular_prob_perpendicular: 0.85,
+        specular_prob_parallel: 0.95,
+        _pad3: [0., 0.],
     },
     // Some light emitting block
     Material {
-        color: [0.8, 0.6, 0.6],
+        color: [0.6, 0.6, 0.6],
+        _pad1: 0.,
         specular_color: [0.0, 0.0, 0.0],
+        _pad2: 0.,
         emission_color: [1.0, 0.0, 0.0],
         emission_strength: 1.0,
-        specular_prob: 0.0,
+        specular_prob_perpendicular: 0.0,
+        specular_prob_parallel: 0.0,
+        _pad3: [0., 0.],
     },
     // Some light emitting block 2
     Material {
-        color: [0.8, 0.6, 0.6],
+        color: [0.6, 0.6, 0.6],
+        _pad1: 0.,
         specular_color: [0.0, 0.0, 0.0],
+        _pad2: 0.,
         emission_color: [0.0, 1.0, 0.0],
         emission_strength: 1.0,
-        specular_prob: 0.0,
+        specular_prob_perpendicular: 0.0,
+        specular_prob_parallel: 0.0,
+        _pad3: [0., 0.],
     },
 ];
 
@@ -268,7 +288,7 @@ fn get_compute_command_buffers(
                     Arc::clone(descriptor_set),
                 )
                 .unwrap()
-                .dispatch([dimensions.width / SUBGROUP_SIZE, dimensions.height / SUBGROUP_SIZE, 1])
+                .dispatch([dimensions.width / SUBGROUP_WIDTH, dimensions.height / SUBGROUP_HEIGHT, 1])
                 .unwrap();
 
             builder.build().unwrap()
@@ -439,10 +459,10 @@ fn main() {
         viewport_dist: 0.1,
         resolution: (dimensions.width, dimensions.height),
         avg_fov: Rad(1.),
-        controller: CameraController::new(5., 1.),
+        controller: CameraController::new(10., 1.),
     };
 
-    let mut ubo = Ubo {
+    let ubo = Ubo {
         sun_dir: [0.39036, 0.78072, 0.48795],
         tlc_minxi: -2,
         tlc_minzi: -2,
@@ -514,6 +534,12 @@ fn main() {
         &mut chunk_bitmasks,
     ).unwrap();
     update_voxel(
+        voxel_index(9, 15, 2, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+        1,
+        &mut vmi,
+        &mut chunk_bitmasks,
+    ).unwrap();
+    update_voxel(
         voxel_index(9, 15, 13, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
         1,
         &mut vmi,
@@ -568,6 +594,31 @@ fn main() {
         &mut vmi,
         &mut chunk_bitmasks,
     ).unwrap();
+
+    // for x in -25..25 {
+    //     for y in 0..25 {
+    //         for z in -25..25 {
+    //             update_voxel(
+    //                 voxel_index(x, y, z, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+    //                 1,
+    //                 &mut vmi,
+    //                 &mut chunk_bitmasks,
+    //             ).unwrap();
+    //         }
+    //     }
+    // }
+    // for x in -24..24 {
+    //     for y in 0..24 {
+    //         for z in -24..24 {
+    //             update_voxel(
+    //                 voxel_index(x, y, z, &tlci, ubo.tlc_minxi, ubo.tlc_minzi),
+    //                 0,
+    //                 &mut vmi,
+    //                 &mut chunk_bitmasks,
+    //             ).unwrap();
+    //         }
+    //     }
+    // }
 
     let idx = voxel_index(-3, 13, 10, &tlci, ubo.tlc_minxi, ubo.tlc_minzi);
     println!("0: {}, {}", idx[0], idx[0] % 128);
@@ -637,7 +688,7 @@ fn main() {
             allocate_preference: MemoryAllocatePreference::AlwaysAllocate,
             ..Default::default()
         },
-        ubo.clone(),
+        ubo,
     ).unwrap();
 
     let ubo_buffer: Subbuffer<Ubo> = Buffer::new_sized(

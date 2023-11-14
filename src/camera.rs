@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 use std::time::Duration;
-use cgmath::{Angle, Euler, InnerSpace, Point3, Quaternion, Rad, Rotation, Vector3};
+use cgmath::{Angle, InnerSpace, Point3, Rad, Vector3};
 use vulkano::buffer::BufferContents;
 use winit::event::{ElementState, VirtualKeyCode};
 
@@ -56,9 +56,13 @@ impl Camera {
 #[repr(C)]
 pub struct CameraUBO {
     eye: [f32; 3],
+    _pad1: f32,
     viewport_center: [f32; 3],
+    _pad2: f32,
     right_dir: [f32; 3],  // should be normalized
+    _pad3: f32,
     up_dir: [f32; 3],  // should be normalized
+    _pad4: f32,
 }
 
 impl CameraUBO {
@@ -68,6 +72,10 @@ impl CameraUBO {
             viewport_center: [0.0, 0.0, 0.0],
             right_dir: [0.0, 0.0, 0.0],
             up_dir: [0.0, 0.0, 0.0],
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
         s.update(camera, origin);
         s
