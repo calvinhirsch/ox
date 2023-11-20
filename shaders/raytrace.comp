@@ -1,18 +1,38 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : enable
 
-const uint N_BOUNCES = 5;
-const uint N_CASTS = 1;
-const uint CHUNK_SIZE = 8;  // Number of blocks in each chunk level
-const uint N_CHUNK_LVLS = 2;  // 2 means there are two chunk sizes (CHUNK_SIZE and CHUNK_SIZE**2) where the largest chunk size is the world height
-const uint RENDER_N_TLCHUNKS = 4;  // Render THIS x THIS top level chunks around player (assuming world is only 1 top level chunk high)
+#define cubed(X) ((X) * (X) * (X))
+#define squared(X) ((X)*(X))
+
+#define CHUNK_SIZE 8  // Number of blocks in each chunk level
+#define N_CHUNK_LVLS 2  // 2 means there are two chunk sizes (CHUNK_SIZE and CHUNK_SIZE**2) where the largest chunk size is the world height
+
+#define N_BOUNCES 4
+#define N_CASTS 5
+
+
+// Expecting the following to be passed in:
+#define LOCAL_SIZE 8
+#define N_MATERIALS 5
+#define N_MATERIAL_ID_BITS 8
+#define RENDER_N_TLC_LOD0 3
+#define RENDER_N_TLC_LOD1 7
+#define RENDER_N_TLC_LOD2 15
+#define RENDER_N_TLCS 31
+
 const uint CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS+2] = {1, CHUNK_SIZE, CHUNK_SIZE*CHUNK_SIZE, 99999999};  // Chunk level 0 means working directly with blocks (i.e. size of 1)
-const uint N_CHUNKS[N_CHUNK_LVLS+1] = {
-        CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS,
-        CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE*RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS,
-        RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS,
+const uint N_LODS = 3;  // LODs are assumed to group voxels into blocks of size 2^0, 2^1, 2^2, etc.
+const uint RENDER_N_TLCS_LOD[N_LODS] = {RENDER_N_TLC_LOD0, RENDER_N_TLC_LOD1, RENDER_N_TLC_LOD2};  // Render THIS x THIS x THIS top level chunks around player for each LOD
+const uint BLOCK_CAPACITY_LOD[N_LODS] = {  // Number of blocks that need to be stored for each LOD
+    (RENDER_N_TLCS_LOD[0]+1)*(RENDER_N_TLCS_LOD[0]+1)*(RENDER_N_TLCS_LOD[0]+1),
+    (RENDER_N_TLCS_LOD[1]+1)*(RENDER_N_TLCS_LOD[1]+1)*(RENDER_N_TLCS_LOD[1]+1),
+    (RENDER_N_TLCS_LOD[2]+1)*(RENDER_N_TLCS_LOD[2]+1)*(RENDER_N_TLCS_LOD[2]+1),
 };
-const uint N_MATERIAL_ID_BITS = 8;
+const uint BLOCK_CAPACITY_LVL[N_CHUNK_LVLS] = {
+        BLOCK_CAPACITY_LOD[0],
+        (RENDER_N_TLCS+1)*(RENDER_N_TLCS+1)*(RENDER_N_TLCS+1),
+};
+
 const uint MATERIALS_PER_VEC4 = 128 / N_MATERIAL_ID_BITS;
 const uint MATERIALS_PER_INT = 32 / N_MATERIAL_ID_BITS;
 const uint N_MATERIALS = 1 << N_MATERIAL_ID_BITS;
@@ -36,7 +56,7 @@ struct Material {
 };
 // Constant material buffer
 layout (set = 0, binding = 1) uniform MaterialS {
-    Material defs[5];
+    Material defs[N_MATERIALS];
 } materials;
 
 layout (set = 0, binding = 2) readonly uniform Camera {
@@ -49,36 +69,56 @@ layout (set = 0, binding = 2) readonly uniform Camera {
 // Uniform buffer object that holds all other info that gets updated every frame
 layout (set = 0, binding = 3) readonly uniform UBO {
     vec3 sun_dir;
-    int tlc_minxi;
-    int tlc_minzi;
+    ivec3 start_tlc;  // lowest TLC loaded (x,y,z index), which is (0, 0, 0) in the top level chunk virtual memory grid
     uint time;
 } ubo;
 
-// Top level chunks are randomly ordered in memory to avoid mass copying. So this is a mapping from expected index
-// (where index = X + Z * RENDER_N_TLCHUNKS) to actual index
-layout (set = 0, binding = 4) readonly uniform TopLevelChunkIndices {
-    uvec4 indices[RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS/4];
-} tlci;
 
 // Material IDs for each voxel
-layout (set = 0, binding = 5, scalar) readonly buffer MaterialIndex {
-    uvec4 indices[N_CHUNKS[0] * N_MATERIAL_ID_BITS / 128];
-} voxel_material_ids;
+
+layout (set = 0, binding = 4, scalar) readonly buffer MaterialIndex0 {
+    uvec4 indices[BLOCK_CAPACITY_LOD[0] * N_MATERIAL_ID_BITS / 128];
+} vmi0_lod0;  // LOD 0 (1x1x1)
+layout (set = 0, binding = 5, scalar) readonly buffer MaterialIndex1 {
+    uvec4 indices[BLOCK_CAPACITY_LOD[1] * N_MATERIAL_ID_BITS / 128];
+} vmi0_lod1;  // LOD 1 (2x2x2)
+layout (set = 0, binding = 6, scalar) readonly buffer MaterialIndex2 {
+    uvec4 indices[BLOCK_CAPACITY_LOD[2] * N_MATERIAL_ID_BITS / 128];
+} vmi0_lod2;  // LOD 2 (4x4x4)
+layout (set = 0, binding = 7, scalar) readonly buffer MaterialIndex3 {
+    uvec4 indices[BLOCK_CAPACITY_LVL[1] * N_MATERIAL_ID_BITS / 128];
+} vmi1;  // Chunk lvl 1 (8x8x8)
 
 // Chunk bitmasks at each chunk level
-layout (set = 0, binding = 6, scalar) readonly buffer VoxelBitmask0 {
-    uvec4 mask[uint((N_CHUNKS[0] + 127) / 128)];
+
+// LOD 0, down to chunk level 0
+layout (set = 0, binding = 8, scalar) readonly buffer VoxelBitmask0LOD0 {
+    uvec4 mask[BLOCK_CAPACITY[0] / 128];
 } chunk_bitmasks0;
 
-layout (set = 0, binding = 7, scalar) readonly buffer VoxelBitmask1 {
-    uvec4 mask[uint((N_CHUNKS[1] + 127) / 128)];
+// LOD 1, down to chunk level 0
+layout (set = 0, binding = 9, scalar) readonly buffer VoxelBitmask0LOD1 {
+    uvec4 mask[BLOCK_CAPACITY[1] / 128];
 } chunk_bitmasks1;
 
-layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+// LOD 2, down to chunk level 0
+const uint CBM0_LOD1_BLOCKS = (RENDER_N_TLCS[0]+1)*min(WORLD_HEIGHT/CHUNK_LVL_BLOCK_SIZE[0], RENDER_N_TLCS[0]+1)*(RENDER_N_TLCS[0]+1);
+layout (set = 0, binding = 10, scalar) readonly buffer VoxelBitmask0LOD2 {
+    uvec4 mask[BLOCK_CAPACITY[2] / 128];
+} chunk_bitmasks2;
+
+// LOD 3, stops at chunk level 1
+layout (set = 0, binding = 11, scalar) readonly buffer VoxelBitmask1 {
+    uvec4 mask[BLOCK_CAPACITY[3] / 128];
+} chunk_bitmasks3;
+
+// No bitmask for top level chunks (TLCs) because this is encoded in tlci
+
+layout (local_size_x = LOCAL_SIZE, local_size_y = LOCAL_SIZE, local_size_z = 1) in;
 
 
-ivec3 amod (ivec3 v, uint m) {
-    return ivec3(((v % m) + m) % m);
+uvec3 amod (ivec3 v, uint m) {
+    return ((v % int(m)) + int(m)) % m;
 }
 
 
@@ -109,26 +149,57 @@ vec3 rand_dir(inout uint state) {
 }
 
 
+// Utils
+
+// Generic indexing scheme
+uint index(uint x, uint y, uint z, uint n) {
+    return x + y*n*n + z*n;
+}
+uint indexv(uvec3 idx, uint n) {
+    return index(idx.x, idx.y, idx.z, n);
+}
+
+
 // Ray tracing utils
 
-// Keeps track of current block/chunk at all levels in xyz axes (level 0 is a voxel position relative to lvl 1 chunk, level 1 is a
+// Keeps track of current block/chunk at all levels in xyz axes at current LOD (tlc_meta.lod)
+// (level 0 is a voxel position relative to lvl 1 chunk, level 1 is a
 // chunk position (in units of CHUNK_SIZE) relative to lvl2 chunk, lvl 2 chunk is chunk position (in units of
 // CHUNK_SIZE^2) relative to lvl3 chunk, etc.)
 // TODO: I don't understand why vec3 block[...] doesn't work, this is a workaround. Might be a better way.
-int block[N_CHUNK_LVLS+1][3];
+uint block[N_CHUNK_LVLS+1][3];
+TLCMetadata tlc_meta = TLCMetadata(0, 0);
 
 ivec3 abs_block(uint lvl, uint axis_a, uint axis_b, uint axis_c) {
     // Get the absolute position of the current block at lvl in lvl units
-    ivec3 pt = ivec3(block[N_CHUNK_LVLS][axis_a], block[N_CHUNK_LVLS][axis_b], block[N_CHUNK_LVLS][axis_c]);
+    uvec3 pt = uvec3(block[N_CHUNK_LVLS][axis_a], block[N_CHUNK_LVLS][axis_b], block[N_CHUNK_LVLS][axis_c]);
     if (lvl == 2) {
         return pt;
     }
     for (int lvli = int(N_CHUNK_LVLS)-1; lvli >= lvl; lvli--) {
-        pt *= int(CHUNK_SIZE);
-        pt += ivec3(block[lvli][axis_a], block[lvli][axis_b], block[lvli][axis_c]);
+        pt *= CHUNK_SIZE;
+        pt += uvec3(block[lvli][axis_a], block[lvli][axis_b], block[lvli][axis_c]);
     }
 
-    return pt;
+    return pt >> tlc_meta.lod;
+}
+
+// Top level chunk memory grid offset
+// For a specified top level chunk memory grid (lvl/LOD combo), how is the virtual memory grid offset from the physical
+// one. The virtual  memory grid will wrap around when offset is greater than zero in any given dimension. The physical
+// memory grid is 1 larger in each dimension than the virtual one in order to buffer chunk loading, so there is one
+// value in each dim in the physical memory grid not present in the virtual one. This value is at (offset - 1) % N or
+// (offset + N-1) % N.
+uvec3 tlcmg_offset(uint lvl, uint lod) {
+    return amod(ubo.start_tlc, (lvl > 0 ? RENDER_N_TLCS : RENDER_N_TLCS_LOD[lod])+1);
+}
+
+uint tlc_index_for_lvl(uint lvl) {
+    // Border thickness of TLCs loaded outside the current LOD.
+    uint render_n_tlcs = lvl > 0 ? RENDER_N_TLCS : RENDER_N_TLCS_LOD[tlc_meta.lod];
+    uvec3 offset = tlcmg_offset(lvl, tlc_meta.lod);
+    uint border_width = (RENDER_N_TLCS_LOD[N_LODS-1] - render_n_tlcs) >> 1;
+    return indexv((uvec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]) + offset - border_width) % (render_n_tlcs+1), render_n_tlcs);
 }
 
 void set_block_tlc(vec3 ray_origin_xyz) {
@@ -136,26 +207,32 @@ void set_block_tlc(vec3 ray_origin_xyz) {
     block[N_CHUNK_LVLS][0] = tlc.x;
     block[N_CHUNK_LVLS][1] = tlc.y;
     block[N_CHUNK_LVLS][2] = tlc.z;
+    tlc_meta = tlc_metadata_grid.index[tlc_index_for_lvl(N_CHUNK_LVLS)];
 }
 
 void set_block_at_lvls(vec3 ray_origin_xyz, int at_lvl_and_below) {
-    if (at_lvl_and_below >= N_CHUNK_LVLS) {
-        set_block_tlc(ray_origin_xyz);
-    }
-
-    ivec3 pt = ivec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]);
-    for (int lvli = int(N_CHUNK_LVLS-1); lvli >= 0; lvli--) {
-        pt *= int(CHUNK_SIZE);
-
-        if (lvli <= at_lvl_and_below) {
-            ivec3 pti = clamp(ivec3(floor(ray_origin_xyz / CHUNK_LVL_BLOCK_SIZE[lvli])) - pt, ivec3(0), ivec3(int(CHUNK_SIZE - 1)));
-            pt += pti;
-            block[lvli][0] = pti.x;
-            block[lvli][1] = pti.y;
-            block[lvli][2] = pti.z;
+    if (at_lvl_and_below >= 0) {
+        if (at_lvl_and_below >= N_CHUNK_LVLS) {
+            set_block_tlc(ray_origin_xyz);
         }
-        else {
-            pt += ivec3(block[lvli][0], block[lvli][1], block[lvli][2]);
+
+        uvec3 pt = uvec3(block[N_CHUNK_LVLS][0], block[N_CHUNK_LVLS][1], block[N_CHUNK_LVLS][2]);
+        for (int lvli = int(N_CHUNK_LVLS - 1); lvli >= 0; lvli--) {
+            pt *= CHUNK_SIZE;
+
+            if (lvli <= at_lvl_and_below) {
+                uvec3 pti = uvec3(clamp(ivec3(floor(ray_origin_xyz / CHUNK_LVL_BLOCK_SIZE[lvli])) - pt, ivec3(0), ivec3(int(CHUNK_SIZE - 1))));
+                if (lvli == 0) {
+                    pti = pti >> tlc_meta.lod;
+                }
+                pt += pti;
+                block[lvli][0] = pti.x;
+                block[lvli][1] = pti.y;
+                block[lvli][2] = pti.z;
+            }
+            else {
+                pt += uvec3(block[lvli][0], block[lvli][1], block[lvli][2]);
+            }
         }
     }
 }
@@ -165,18 +242,18 @@ void step_block(uint ax, float ax_dir, uint lvl) {
     // ax is xyz (not abc)
     // If this will cross the boundary of a higher level chunk (i.e. block pos in ax < 0 or > CHUNK_SIZE
     int incr;
-    int val;
+    uint val;
     if (ax_dir > 0) {
         incr = 1;
         val = 0;
     }
     else {
-        incr = -1;
-        val = int(CHUNK_SIZE)-1;
+        incr = -1;  // if block is 0, this will cause it to loop to uint max which is fine, >= CHUNK_SIZE checks this  TODO: Verify this
+        val = CHUNK_SIZE-1;
     }
 
     block[lvl][ax] += incr;
-    for (uint lvli = lvl; lvli < N_CHUNK_LVLS && (block[lvli][ax] == -1 || block[lvli][ax] == CHUNK_SIZE); lvli++) {
+    for (uint lvli = lvl; lvli < N_CHUNK_LVLS && (block[lvli][ax] >= CHUNK_SIZE); lvli++) {
         block[lvli+1][ax] += incr;
         block[lvli][ax] = val;
     }
@@ -187,12 +264,7 @@ void step_block(uint ax, float ax_dir, uint lvl) {
 
 uint block_index(uint lvl) {
     if (lvl == N_CHUNK_LVLS) {
-        uint idx_to_look_up = (
-            block[lvl][0] +
-            block[lvl][1] * RENDER_N_TLCHUNKS * RENDER_N_TLCHUNKS +
-            block[lvl][2] * RENDER_N_TLCHUNKS
-        );
-        return tlci.indices[idx_to_look_up/4][idx_to_look_up%4];
+        return tlc_index_for_lvl(lvl);
     }
     return block[lvl][0] + block[lvl][1] * CHUNK_SIZE * CHUNK_SIZE + block[lvl][2] * CHUNK_SIZE;
 }
@@ -238,9 +310,8 @@ uint grid_index(ivec3 ipos, uint ax_a, uint ax_b, uint ax_c, uint lvl) {
 
     uint mult = CHUNK_SIZE;
     if (lvl == N_CHUNK_LVLS) {
-        idx.x -= ubo.tlc_minxi;
-        idx.z -= ubo.tlc_minzi;
-        mult = RENDER_N_TLCHUNKS;
+        idx -= ubo.start_tlc;
+        mult = RENDER_N_TLCS;
     }
 
     // Indexing scheme is x + y * N^2 + z * N so that array for top level chunks (which have y length = 1) is contiguous
@@ -271,10 +342,10 @@ vec3 set_ray_pos_on_intersect(ivec3 chunk_botleft_blk, vec3 ray_dir, ivec3 ipos,
     int new_pos = ipos[crossed_ax] + int(ray_dir[crossed_ax] < 0);
     ray_origin[crossed_ax] += new_pos;
 
-    // Amount we have to rewind to get crossed_ax to the point where it crossed
+    // Amount we have to step to get crossed_ax to the point where it crossed
     float delta = (new_pos - curr_ray_origin[crossed_ax]) / (ray_dir[crossed_ax] + 0.00000000001);
-    ray_origin.x += curr_ray_origin.x + delta * ray_dir.x;  // if a has negative direction, add 1 to get to upper side of the block
 
+    ray_origin.x += curr_ray_origin.x + delta * ray_dir.x;
     uint other_ax = 3 - crossed_ax;  // quicker way of doing (crossed_ax == 1 ? 2 : 1)
     ray_origin[other_ax] += curr_ray_origin[other_ax] + delta * ray_dir[other_ax];
 
@@ -336,13 +407,12 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
     int bounce = 0;
     for (; bounce < N_BOUNCES; bounce++) {
         bool hit = false;
+        bool done = false;
         uint global_idx;
 
         // Trace ray until we hit a voxel or the skybox
-        bool done = false;
         uint safety_limit = 0;
-        uint stall_count = 0;
-        for (; safety_limit < 500 && !done; safety_limit++) {
+        for (; safety_limit < 100 && !done; safety_limit++) {
             uint chunk_botleft_idx = chunk_botleft_index(lvl);
             ivec3 chunk_botleft_blk = chunk_abs_botleft_block(lvl, axis_a, axis_b, axis_c);
 
@@ -352,49 +422,47 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
             ivec3 max_pt;
 
             if (lvl == N_CHUNK_LVLS) {
-                max_pt = ivec3(RENDER_N_TLCHUNKS, 1, RENDER_N_TLCHUNKS);
+                max_pt = ivec3(RENDER_N_TLCS, 1, RENDER_N_TLCS);
             }
             else {
-                max_pt = ivec3(int(CHUNK_SIZE), int(CHUNK_SIZE), int(CHUNK_SIZE));
+                max_pt = ivec3(uvec3(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE) >> tlc_meta.lod);
             }
 
             // Set ray_origin to now be the relative position in current chunk in units of current level (should be within min_pt, max_pt)
-            ray_origin = (ray_origin / CHUNK_LVL_BLOCK_SIZE[lvl]) - chunk_botleft_blk;
+            ray_origin = ((ray_origin / CHUNK_LVL_BLOCK_SIZE[lvl]) >> tlc_meta.lod) - chunk_botleft_blk;
 
             // Integer position of the block we are currently on at the current level
             ivec3 ipos = ivec3(block[lvl][axis_a], block[lvl][axis_b], block[lvl][axis_c]);
+            int last_bi = ipos.y;
+            int last_ci = ipos.z;
 
             // We want to step a by 1 (or -1 if it is in negative direction) and the other axes relative to that
             int a_dir = (int(ray_dir.x > 0) * 2 - 1);
 
-            // ray_origin should be within the bounds of block[lvl][axis_a] (AKA ipos.x) or else something else has messed up.
-            // So, a_floored_amt should always be <= 1
-            // Also, if a_dir is negative then we need to add 1 because we are at the 'top' (larger a) side of block ai
+            // Find a step magnitude that will snap ray_origin to the desired integer a value (ipos.x)
+            // If a_dir is negative then we need to add 1 because we are at the 'top' (larger a) side of block ai
             float a_floor_amt = ray_origin.x - (ipos.x + int(ray_dir.x < 0));
             ray_origin -= ray_dir * a_floor_amt * a_dir;
 
-            int last_bi = ipos.y;
-            int last_ci = ipos.z;
-
             ///////////////////////  DEBUG  ///////////////////////////
-            // This is now outdated
-//            // Don't care to check these things if we are out of bounds
-//            if (ai < 0 || ai >= CHUNK_SIZE) {
-//                return vec3(0, 0, 1) * (lvl + 1) / 3.0;
+//            if (ipos.x < 0 || ipos.x >= CHUNK_SIZE) {
+//                return vec3(0, 1, 0);
 //            }
-//            if (bi < 0 || bi >= CHUNK_SIZE) {
-//                return vec3(0, 0, 1) * (lvl + 1) / 3.0;
+//            if (ipos.y < 0 || ipos.y >= CHUNK_SIZE) {
+//                return vec3((ray_origin + chunk_botleft_blk) / 256.0);
 //            }
-//            if (ci < 0 || ci >= CHUNK_SIZE) {
-//                return vec3(0, 0, 1) * (lvl + 1) / 3.0;
-//            }
-//
-//            if ((abs(a_floored_amt) > 1.01) || (abs(pos[ax_b] - (block[lvl][ax_b] + b_neg)) > 1.01) || (abs(pos[ax_c] - (block[lvl][ax_c] + c_neg)) > 1.01)) {
-//                return vec3(1, 0, 0.3);
+//            if (ipos.z < 0 || ipos.z >= CHUNK_SIZE) {
+//                return vec3((ray_origin + chunk_botleft_blk) / 256.0);
 //            }
             ///////////////////////   END   ///////////////////////////
 
             // Check if the block we are starting in got hit
+            // If crossed_ax != 0 (axis a) then ipos will actually be different from the block ray_origin is in because
+            // ipos will represent the block where we crossed into this chunk but we steppd ray_origin backward in order
+            // to get to an integer 'a' value (ray_origin.x). If we crossed a different axis, this will take ray_origin
+            // out of the ipos block (and may be outside of the current chunk). This is intended because last_bi will be
+            // equal to ipos.y (and same for last_ci and ipos.z) so the search will not check the blocks the ray intersected
+            // with since the last integer a value that were before the provided block[lvl] for this search start point.
             global_idx = chunk_botleft_idx + grid_index(ipos, axis_a, axis_b, axis_c, lvl);
             if (is_true_in_mask(global_idx, lvl)) {
                 // Hit!
@@ -503,6 +571,10 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                 ipos.yz = ivec2(floor(ray_origin.yz));
             }
 
+            // Set ray_origin as if its LOD is zero
+            ray_origin = ray_origin << tlc_meta.lod;
+            ipos = ipos << tlc_meta.lod;
+
             // Set ray_origin back to global abc coords (rather than relative to the current chunk)
             // If we crossed an axis other than a (i.e. axis b or c), ray_origin will not be at the point of intersection.
             // We need to move pos/ray_origin so that it is. If we crossed axis a, just put it in global coords.
@@ -530,10 +602,12 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
             if (hit) {
                 if (lvl > 0) {
+                    // Hit a subchunk, dive into that subchunk
                     hit = false;
                     lvl--;
                 }
                 else {
+                    // Hit a voxel
                     done = true;
                 }
             }
@@ -547,7 +621,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                         step_block(crossed_ax_xyz, ray_dir[crossed_ax], lvl);
                     }
 
-                    if (block[2][0] < 0 || block[2][0] >= RENDER_N_TLCHUNKS || block[2][1] < 0 || block[2][1] >= 1 || block[2][2] < 0 || block[2][2] >= RENDER_N_TLCHUNKS) {
+                    if (block[2][0] < 0 || block[2][0] >= RENDER_N_TLCS || block[2][1] < 0 || block[2][1] >= 1 || block[2][2] < 0 || block[2][2] >= RENDER_N_TLCS) {
                         done = true;
                     }
                     else {
@@ -561,7 +635,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
             }
         }
 
-        if (safety_limit > 999) {
+        if (safety_limit > 400) {
             return vec3(0, 1, 0);
         }
 
@@ -575,9 +649,9 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
             // Currently, 'block' is indicating the voxel we just bounced off of. Step it towards the direction
             // we are reflecting to. This must be in XYZ axes.
-            step_block(uvec3(axis_a, axis_b, axis_c)[crossed_ax], ray_dir[crossed_ax], lvl);
+            step_block(uvec3(axis_a, axis_b, axis_c)[crossed_ax], ray_dir[crossed_ax], 0);
 
-            if (block[2][0] < 0 || block[2][0] >= RENDER_N_TLCHUNKS || block[2][1] < 0 || block[2][1] >= 1 || block[2][2] < 0 || block[2][2] >= RENDER_N_TLCHUNKS) {
+            if (block[2][0] < 0 || block[2][0] >= RENDER_N_TLCS || block[2][1] < 0 || block[2][1] >= 1 || block[2][2] < 0 || block[2][2] >= RENDER_N_TLCS) {
                 hit = false;
             }
         }
@@ -628,7 +702,7 @@ void main() {
         vec3 ray_dir = ray_origin - camera.eye;
 
         // Put ray origin into coords with origin at botleft of loaded area
-        ray_origin -= vec3(ubo.tlc_minxi, 0, ubo.tlc_minzi) * CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS];
+        ray_origin -= ubo.start_tlc * CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS];
 
         light += trace_ray(ray_origin, ray_dir, rand_state);
     }

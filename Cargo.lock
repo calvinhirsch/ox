@@ -305,6 +305,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
 
 [[package]]
+name = "derive-new"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d150dea618e920167e5973d70ae6ece4385b7164e0d799fe7c122dd0a5d912ad"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.39",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -330,6 +341,26 @@ name = "either"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a26ae43d7bcc3b814de94796a5e736d4029efb0ee900c12e2d54c993ad1a1e07"
+
+[[package]]
+name = "enum-iterator"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7add3873b5dd076766ee79c8e406ad1a472c385476b9e38849f8eec24f1be689"
+dependencies = [
+ "enum-iterator-derive",
+]
+
+[[package]]
+name = "enum-iterator-derive"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eecf8589574ce9b895052fa12d69af7a233f99e6107f5cb8dd1044f2a17bfdcb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.39",
+]
 
 [[package]]
 name = "equivalent"
@@ -764,6 +795,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4586edfe4c648c71797a74c84bacb32b52b212eff5dfe2bb9f2c599844023e7"
 dependencies = [
  "ttf-parser",
+]
+
+[[package]]
+name = "ox"
+version = "0.1.0"
+dependencies = [
+ "bitvec",
+ "bytemuck",
+ "cgmath",
+ "derive-new",
+ "enum-iterator",
+ "itertools",
+ "num-traits",
+ "vulkano",
+ "vulkano-shaders",
+ "winit",
 ]
 
 [[package]]
@@ -1203,21 +1250,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vulkano-engine"
-version = "0.1.0"
-dependencies = [
- "bitvec",
- "bytemuck",
- "cgmath",
- "itertools",
- "num-traits",
- "vulkano",
- "vulkano-shaders",
- "vulkano-win",
- "winit",
-]
-
-[[package]]
 name = "vulkano-macros"
 version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1242,19 +1274,6 @@ dependencies = [
  "shaderc",
  "syn 2.0.39",
  "vulkano",
-]
-
-[[package]]
-name = "vulkano-win"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b26c66e8600327823c15184e096eab37a7491d2f3f52b4956c21d84594fb0183"
-dependencies = [
- "core-graphics-types",
- "objc",
- "raw-window-handle",
- "vulkano",
- "winit",
 ]
 
 [[package]]

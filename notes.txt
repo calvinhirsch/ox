@@ -1,5 +1,10 @@
 TODO:
- - Test if safety limit is ever being reached--if so, could have huge performance impact. Try setting it super high and checking performance
+ - Fix infinite loop while tracing ray. Happens at lvl 0 iteration 0 after 2-3 bounces
+
+Plans:
+ - Configurable terrain generation function at any LOD
+ - Sub-voxels
+
 
  Nvidia Nsight profiling metric descriptions:
  https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-decoder

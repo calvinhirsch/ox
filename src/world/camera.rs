@@ -13,34 +13,45 @@ pub struct Camera {
     pub viewport_dist: f32,
     pub resolution: (u32, u32),  // width, height
     pub avg_fov: Rad<f32>,  // average of x-fov and y-fov
+}
 
-    pub controller: CameraController,
+impl Default for Camera {
+    fn default() -> Self {
+        Camera {
+            position: Point3 { x: 0., y: 0., z: 0. },
+            yaw: 0.into(),
+            pitch: 0.into(),
+            viewport_dist: 0.1,
+            resolution: (0, 0),
+            avg_fov: 90.into(),
+        }
+    }
 }
 
 impl Camera {
-    pub fn apply_controller_updates(&mut self, dt: Duration) {
+    pub fn apply_controller_updates(&mut self, controller: &mut CameraController, dt: Duration) {
         let dt = dt.as_secs_f32();
 
         // Move forward/backward and left/right
         let (yaw_sin, yaw_cos) = self.yaw.0.sin_cos();
         let forward = Vector3::new(yaw_cos, 0.0, -yaw_sin).normalize();
         let right = Vector3::new(-yaw_sin, 0.0, -yaw_cos).normalize();
-        self.position += forward * (self.controller.amount_forward - self.controller.amount_backward) * self.controller.speed * dt;
-        self.position += right * (self.controller.amount_right - self.controller.amount_left) * self.controller.speed * dt;
+        self.position += forward * (controller.amount_forward - controller.amount_backward) * controller.speed * dt;
+        self.position += right * (controller.amount_right - controller.amount_left) * controller.speed * dt;
 
         // Move up/down. Since we don't use roll, we can just
         // modify the y coordinate directly.
-        self.position.y += (self.controller.amount_up - self.controller.amount_down) * self.controller.speed * dt;
+        self.position.y += (controller.amount_up - controller.amount_down) * controller.speed * dt;
 
         // Rotate
-        self.yaw += Rad(self.controller.rotate_horizontal) * self.controller.sensitivity * dt;
-        self.pitch += Rad(self.controller.rotate_vertical) * self.controller.sensitivity * dt;
+        self.yaw += Rad(controller.rotate_horizontal) * controller.sensitivity * dt;
+        self.pitch += Rad(controller.rotate_vertical) * controller.sensitivity * dt;
 
         // If process_mouse isn't called every frame, these values
         // will not get set to zero, and the camera will rotate
         // when moving in a non cardinal direction.
-        self.controller.rotate_horizontal = 0.0;
-        self.controller.rotate_vertical = 0.0;
+        controller.rotate_horizontal = 0.0;
+        controller.rotate_vertical = 0.0;
 
         // Keep the camera's angle from going too high/low.
         if self.pitch < -Rad(SAFE_FRAC_PI_2) {

@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/vulkano-engine.iml" filepath="$PROJECT_DIR$/.idea/vulkano-engine.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../ox/.idea/ox.iml" filepath="$PROJECT_DIR$/../ox/.idea/ox.iml" />
     </modules>
   </component>
 </project>
