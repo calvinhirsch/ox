@@ -2,12 +2,12 @@ use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use derive_new::new;
 use vulkano::command_buffer::BufferCopy;
 use super::{
-    MemoryGridMetadata, MemoryGridLayer, MemoryGridLayerMetadata,
+    MemoryGridMetadata, MemoryGridLayerMetadata,
     utils::{cubed, pos_index, pos_for_index},
-    rendering_data::{
-        MemoryGridChunkRenderingData,
-        gpu_defs::{VoxelTypeIDs},
+    rendering::{
+        RenderingLayerChunkData,
     },
+    physical_grid::{MemoryGrid, MemoryGridLayer}
 };
 use crate::{
     world::{
@@ -15,43 +15,73 @@ use crate::{
     },
     voxel_type::{VoxelTypeEnum},
 };
+use crate::world::mem_grid::MemoryGridLayerChunkData;
+use crate::world::mem_grid::physical_grid::MemoryGridLayerSet;
+use crate::world::mem_grid::rendering::gpu_defs::{ChunkBitmask, ChunkVoxelIDs};
+use crate::world::mem_grid::rendering::{ChunkRenderingData, RenderingLayerSet, RenderingLayerSetMetadata};
+use crate::world::TLCVector;
 
-pub struct TrackedMemoryGridChunkRenderingData<VE: VoxelTypeEnum> {
-    data: MemoryGridChunkRenderingData<VE>,
-    bitmask_updated_regions: Vec<BufferCopy>,
-    voxel_ids_updated_regions: Vec<BufferCopy>,
+
+pub trait MemoryGridChunkData: Sized {
+    fn new_empty() -> Self;
+    fn new_blank(chunk_size: usize) -> Self;
 }
 
 
 #[derive(Clone, new)]
-pub struct TopLevelChunk<VE: VoxelTypeEnum> {
-    // TODO: Include user defined data here
-    rendering_layer_data: Vec<Vec<Option<TrackedMemoryGridChunkRenderingData<VE>>>>,
+pub struct TopLevelChunk<VE: VoxelTypeEnum, CD: MemoryGridChunkData> {
+    data: CD,
+    rendering_data: ChunkRenderingData<VE>,
 }
 
-impl<VE: VoxelTypeEnum> TopLevelChunk<VE> {
-    fn update_higher_lods_from(&mut self, data: MemoryGridChunkRenderingData<VE>) {
+impl<VE: VoxelTypeEnum, CD: MemoryGridChunkData> TopLevelChunk<VE, CD> {
+    // TODO: These should do something to self.data also
 
+    fn set_raw_voxel_ids(&mut self, voxel_ids: ChunkVoxelIDs, grid_meta: &MemoryGridMetadata) {
+        self.update_higher_lods_from(&voxel_ids, grid_meta);
+        self.rendering_data[0][0].unwrap().data.set_from_voxels(voxel_ids, 0, 0, grid_meta);
+    }
+
+    fn update_higher_lods_from(&mut self, voxel_ids: &ChunkVoxelIDs, grid_meta: &MemoryGridMetadata) {
+        for lvl in 0..grid_meta.n_chunk_lvls {
+            for lod in 0..grid_meta.n_lods {
+                if (lvl, lod) == (0, 0) { continue; }
+                match &mut self.rendering_data[lvl][lod] {
+                    None => {},
+                    Some(rdata) => {
+                        rdata.data.calc_from_lower_lod_voxels(
+                            voxel_ids,
+                            lod,
+                            lvl,
+                            0,
+                            0,
+                            grid_meta,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
-#[derive(Clone)]
-pub struct VirtualMemoryGrid<VE: VoxelTypeEnum> {
-    data: Vec<TopLevelChunk<VE>>,
-    layer_metadata: Vec<Vec<Option<MemoryGridLayerMetadata>>>,
+#[derive(Clone, new)]
+pub struct VirtualMemoryGrid<VE: VoxelTypeEnum, DL: MemoryGridLayerSet> {
+    top_level_chunks: Vec<TopLevelChunk<VE, DL::ChunkData>>,
+    rendering_layer_metadata: RenderingLayerSetMetadata,
+    data_layer_metadata: DL::LayerSetMetadata,
     gen_func: fn(VoxelPos<i64>) -> VE,
     meta: MemoryGridMetadata,
 }
 
-impl<VE: VoxelTypeEnum> VirtualMemoryGrid<VE> {
-    fn virtual_grid_pos_for_layer(&self, pos: &TLCPos<usize>, layer_meta: &MemoryGridLayerMetadata) -> TLCPos<usize> {
+impl<VE: VoxelTypeEnum, DL: MemoryGridLayerSet> VirtualMemoryGrid<VE, DL> {
+    fn virtual_grid_pos_for_layer(&self, pos: &TLCPos<usize>, layer_meta: &MemoryGridLayerMetadata<DL::LayerExtraMetadata>) -> TLCPos<usize> {
         TLCPos(pos.0 - Vector3::<usize>::from_value(
             if self.meta.size > layer_meta.size { (self.meta.size - (layer_meta.size-1)) / 2 }
             else { 0 }
         ))
     }
 
-    pub fn load_or_generate_tlc(&self, voxel_output: &mut Vec<VoxelTypeIDs>, tlc: TLCPos<i64>) {
+    pub fn load_or_generate_tlc(&self, voxel_output: &mut ChunkVoxelIDs, tlc: TLCPos<i64>) {
         // TODO: Load if already visited this chunk
 
         let tlc_start_pt = tlc.0 * self.meta.tlc_size as i64;
@@ -68,8 +98,8 @@ impl<VE: VoxelTypeEnum> VirtualMemoryGrid<VE> {
                 vox_index *= cubed(self.meta.chunk_size);
                 vox_index += index[lvl];
             }
-            voxel_output[vox_index / (128 / 8)].indices[vox_index % (128 / 8)] =
-                (self.gen_func)(VoxelPos(tlc_start_pt + vox_pos.cast::<i64>().unwrap())).into();
+
+            voxel_output[vox_index] = (self.gen_func)(VoxelPos(tlc_start_pt + vox_pos.cast::<i64>().unwrap())).into();
 
             index[0] += 1;
             pos[0] = pos_for_index(index[0], self.meta.chunk_size);
@@ -86,36 +116,22 @@ impl<VE: VoxelTypeEnum> VirtualMemoryGrid<VE> {
     }
 
     pub fn reload_all(&mut self) {
-        let mut chunk_voxels: Vec<Vec<VoxelTypeIDs>> = Vec::with_capacity(cubed(self.meta.size));
-        let mut i = 0;
+        // TODO: This loads all the LOD 0 voxels first which is unnecessary but easy
+        let mut tlc_voxel_ids = vec![ChunkVoxelIDs::new(cubed(self.meta.tlc_size))];
         for x in 0..self.meta.size as i64 {
             for z in 0..self.meta.size as i64 {
                 for y in 0..self.meta.size as i64 {
                     let tlc = TLCPos(self.meta.start_tlc.0 + Vector3 { x, y, z });
                     self.load_or_generate_tlc(
-                        &mut self.data[pos_index(tlc.0.cast::<usize>().unwrap().to_vec(), self.meta.size)].rendering_layer_data[0][0],
+                        &mut tlc_voxel_ids[pos_index(tlc.0.cast::<usize>().unwrap().to_vec(), self.meta.size)],
                         tlc,
                     );
-                    i += 1;
                 }
             }
         }
 
-        for (chunk_voxels, chunk_layers) in chunk_voxels.iter().zip(self.data.iter_mut()){
-            let (last_lvl, last_lod) = (0, 0);
-            for lvl in 0..self.meta.n_chunk_lvls {
-                for lod in 0..self.meta.n_lods {
-                    if (lvl, lod) == (0, 0) { continue; }
-                    match chunk_layers.rendering_layer_data[lvl][lod] {
-                        None => {},
-                        Some(rdata) => {
-                            rdata.calc_from_lower_lod_voxels()
-                        }
-                    }
-                    (last_lvl, last_lod) = (lvl, lod);
-                    .
-                }
-            }
+        for (mut tlc, raw_voxels) in self.top_level_chunks.iter().zip(tlc_voxel_ids.into_iter()) {
+            tlc.set_raw_voxel_ids(raw_voxels, &self.meta);
         }
     }
 
@@ -123,80 +139,46 @@ impl<VE: VoxelTypeEnum> VirtualMemoryGrid<VE> {
         let tlc = position / self.meta.tlc_size;
         let mut did_something = false;
         for lod in 0..self.meta.n_lods {
-            match &self.layer_metadata[0][lod] {
+            match &self.rendering_layer_metadata[0][lod] {
                 None => {},
                 Some(meta) => {
                     let layer_tlc = self.virtual_grid_pos_for_layer(&TLCPos(tlc), meta);
-                    match &mut self.data[pos_index(layer_tlc.0, meta.size)].rendering_layer_data[0][lod] {
+                    match &mut self.top_level_chunks[pos_index(layer_tlc.0.to_vec(), meta.size)].rendering_data[0][lod] {
                         None => {},
                         Some(layer_chunk) => {
                             did_something = true;
 
-                            let voxel_size = 2.pow(lod as u32) as usize;
+                            let voxel_size = 2usize.pow(lod as u32);
                             let pos_in_tlc = (position % self.meta.tlc_size) / voxel_size;
-                            let index_in_tlc = pos_index(pos_in_tlc, self.meta.tlc_size / voxel_size);
+                            let index_in_tlc = pos_index(pos_in_tlc.to_vec(), self.meta.tlc_size / voxel_size);
 
-                            layer_chunk.set_block(index_in_tlc, &voxel_type);
+                            layer_chunk.set_voxel(index_in_tlc, voxel_type);
                         }
                     }
                 }
             }
         }
+
+        // TODO: call set_voxel on data layers
 
         Some(())
     }
 
-    pub fn consolidate_and_start_transfer(self) -> Option<(MemoryGrid<VE>, Vec<Vec<Vec<BufferCopy>>>)> {
-        let mut layer_chunks: Vec<Vec<Option<Vec<Option<MemoryGridChunkRenderingData<VE>>>>>> =
-            self.layer_metadata.iter().map(|lods| {
-                lods.iter().map(|data| {
-                    match data {
-                        None => None,
-                        Some(meta) => { Some(vec![None; meta.size]) }
-                    }
-                }).collect()
-            }).collect();
+    pub fn lock(self) -> Option<MemoryGrid<VE, DL>> {
+        let (rendering_layer_chunks, data_layer_chunks) = self.top_level_chunks.into_iter().map(|tlc| {
+            (tlc.rendering_data, tlc.data)
+        }).unzip();
 
-        let mut updated_regions: Vec<Vec<Vec<BufferCopy>>> = vec![vec![vec![]; self.meta.n_lods]; self.meta.n_chunk_lvls+1];
-
-        for (i, chunk) in self.data.into_iter().enumerate() {
-            for (lvl, lvl_data) in chunk.rendering_layer_data.into_iter().enumerate() {
-                for (lod, data) in lvl_data.into_iter().enumerate() {
-                    let meta = self.layer_metadata[lvl][lod]?;
-                    layer_chunks[lvl][lod]?[
-                            meta.index_for_virtual_grid_pos(
-                                TLCPos(pos_for_index(i, self.meta.size) - Vector3::<usize>::from_value(
-                                    if self.meta.size > meta.size { (self.meta.size - (meta.size-1)) / 2 }
-                                    else { 0 }
-                                ))
-                            )
-                        ] = data;
-                }
-            }
-        }
-
-        // TODO: Aggregate all updated regions, copy to staging buffers, and then return them in updated_regions
-
-        Some((
-             MemoryGrid {
-                rendering_layers: layer_chunks.into_iter().zip(self.layer_metadata).map(|(chunks_lvl, meta_lvl)| {
-                    chunks_lvl.into_iter().zip(meta_lvl).map(|(chunks, meta)| {
-                        match chunks {
-                            None => None,
-                            Some(data) => Some(MemoryGridLayer {
-                                chunks: data.try_into().unwrap(),
-                                meta: meta?,
-                            }),
-                        }
-                    }).collect()
-                }).collect(),
-                gen_func: self.gen_func,
-                meta: MemoryGridMetadata {
+        Some(
+            MemoryGrid::new_raw(
+                DL::from_virtual(data_layer_chunks, self.data_layer_metadata, &self.meta)?,
+                RenderingLayerSet::from_virtual(rendering_layer_chunks, self.rendering_layer_metadata, &self.meta)?,
+                self.gen_func,
+                MemoryGridMetadata {
                     size: self.meta.size + 1,
                     ..self.meta
-                }
-            },
-            updated_regions,
-        ))
+                },
+            )
+        )
     }
 }
