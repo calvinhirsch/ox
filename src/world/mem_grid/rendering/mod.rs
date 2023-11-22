@@ -56,10 +56,10 @@ impl MemoryGridLayerExtraMetadata for RenderingLayerExtraMetadata {
 
     fn new(params: MemoryGridLayerCreateParams<RenderingLayerCreateParams>) -> Self {
         RenderingLayerExtraMetadata {
-            lvl: params.lvl,
-            lod: params.lod,
-            bitmask_staging_buffer: params.bitmask_staging_buffer,
-            voxel_type_ids_staging_buffer: params.voxel_type_ids_staging_buffer,
+            lvl: params.extra.lvl,
+            lod: params.extra.lod,
+            bitmask_staging_buffer: params.extra.bitmask_staging_buffer,
+            voxel_type_ids_staging_buffer: params.extra.voxel_type_ids_staging_buffer,
         }
     }
 }

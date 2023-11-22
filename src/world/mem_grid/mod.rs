@@ -1,3 +1,4 @@
+use std::time::Duration;
 use cgmath::{Array, EuclideanSpace, Vector3};
 
 use crate::voxel_type::VoxelTypeEnum;
@@ -8,6 +9,7 @@ use crate::world::{
 pub mod utils;
 use utils::{pos_index, amod, pos_for_index};
 use crate::world::mem_grid::physical_grid::MemoryGridLayerExtraMetadata;
+use crate::world::mem_grid::rendering::gpu_defs::ChunkVoxelIDs;
 
 pub mod rendering;
 
@@ -91,5 +93,7 @@ pub trait NewChunkData<P: Sized> {
 
 /// Data for a single top level chunk for a single layer of a memory grid
 pub trait MemoryGridLayerChunkData<VE: VoxelTypeEnum> {
+    // fn load_from_storage();
+    fn load_from_voxels(voxels: ChunkVoxelIDs) -> Self;
     fn set_voxel(&mut self, index: usize, voxel_type: VE) -> Option<()>;
 }

@@ -58,6 +58,7 @@ struct WorldCreateParams<VE: VoxelTypeEnum, DL: MemoryGridLayerSet> {
     pub n_chunk_lvls: usize,
     pub n_lods: usize,
     pub gen_func: fn(VoxelPos<i64>) -> VE,
+    pub load_func: fn()
     pub layer_params: DL::LayerSetCreateParams,
     pub rendering_layer_params: RenderingLayerSetCreateParams,  // layers should be n_chunk_lvls x n_lods
 }
