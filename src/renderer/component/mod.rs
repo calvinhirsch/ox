@@ -13,7 +13,12 @@ pub mod voxel;
 pub trait DataComponentSet {
     fn list_dynamic_components(&self) -> Vec<&DataComponent<DualBuffer<dyn BufferContents>>>;
     fn list_constant_components(&self) -> Vec<&DataComponent<ConstantBuffer<dyn BufferContents>>>;
-    fn list_all_components(&self) -> Vec<&DataComponent<dyn BufferScheme>>;
+    fn list_all_components(&self) -> Vec<&DataComponent<dyn BufferScheme>> {
+        let mut comps = self.list_dynamic_components();
+        comps.extend(self.list_constant_components());
+
+        comps
+    }
 }
 
 

@@ -6,7 +6,7 @@ use crate::world::camera::Camera;
 use crate::world::mem_grid::{PhysicalMemoryGrid, VirtualMemoryGrid};
 use crate::world::mem_grid::utils::{amod, cubed, pos_for_index, pos_index};
 use crate::world::{TLCPos, TLCVector, VoxelPos};
-use crate::world::mem_grid::rendering::ChunkVoxelIDs;
+use crate::world::mem_grid::voxel::ChunkVoxelIDs;
 
 
 #[derive(Clone)]
@@ -14,6 +14,7 @@ pub struct MemoryGridLayerMetadata<E: Sized> {
     size: usize, // Size of grid in number of TLCs, 1 more than the rendered area size in each dimension for pre-loading
     offsets: Vector3<usize>,
     loaded_upper_chunks: bool,
+    chunks_loaded: Vec<bool>,
     extra: E,
 }
 
@@ -23,8 +24,8 @@ pub struct MemoryGridLayer<D: Sized, MD: Sized> {
 }
 
 // TODO: might be able to remove VirtualMemoryGrid trait and just use this for everything
-pub struct VirtualMemoryGridForLayer<'a, D: Sized, C: From<&mut [D]>, MD: Sized> {
-    metadata: &'a MemoryGridLayerMetadata<MD>,
+pub struct VirtualMemoryGridForLayer<'a, D: Sized, C: VirtualGridChunkData<D>, MD: Sized> {
+    // metadata: &'a MemoryGridLayerMetadata<MD>,
     chunks: Vec<Option<C>>,
 }
 
@@ -35,6 +36,7 @@ impl<E: Sized> MemoryGridLayerMetadata<E> {
             size,
             offsets: Self::calc_offsets(start_tlc, size),
             loaded_upper_chunks: false,
+            chunks_loaded: vec![false; cubed(size)],
             extra,
         }
     }
@@ -48,7 +50,7 @@ impl<D: Sized, MD: Sized> MemoryGridLayer<D, MD> {
 
     pub fn borrow_mem_mut(&mut self) -> &mut Vec<D> { &mut self.memory }
 }
-impl<'a, D: Sized, MD: Sized,C: From<&'a mut [D]>, VE: VoxelTypeEnum> PhysicalMemoryGrid<VE, VirtualMemoryGridForLayer<'a, D, C, MD>> for MemoryGridLayer<D, MD> {
+impl<'a, D: Sized, MD: Sized, C: From<&'a mut [D]>, VE: VoxelTypeEnum> PhysicalMemoryGrid<VE, VirtualMemoryGridForLayer<'a, D, C, MD>> for MemoryGridLayer<D, MD> {
     fn shift_offsets(&mut self, shift: Vector3<i64>) {
         if !shift.is_zero() {
             todo!();
@@ -68,35 +70,31 @@ impl<'a, D: Sized, MD: Sized,C: From<&'a mut [D]>, VE: VoxelTypeEnum> PhysicalMe
 
         let n_per_tlc = self.memory.len() / cubed(self.metadata.size);
         let mut slice = self.memory.as_slice();
-        for chunk_i in 0..cubed(self.metadata.size) {
+        for (chunk_i, loaded) in self.metadata.chunks_loaded.iter().enumerate() {
             // If this layer is smaller than full grid, add padding to virtual position so it
             // is centered
             let virtual_pos = self.metadata.virtual_grid_pos_for_index(chunk_i, grid_size).0;
 
             let (chunk, rest) = self.memory.split_at_mut(n_per_tlc);
             slice = rest;
-            grid[pos_index(virtual_pos, grid_size-1)] = C::from(chunk);
+            grid[pos_index(virtual_pos, grid_size-1)] = C::new(chunk, loaded);
         }
 
         VirtualMemoryGridForLayer {
-            metadata: &self.metadata,
+            // metadata: &self.metadata,
             chunks: grid,
         }
     }
 }
 
 impl<'a, D: Sized, C: From<&mut [D]>, MD: Sized> VirtualMemoryGridForLayer<'a, D, C, MD> {
-    pub fn deconstruct(self) -> (&'a MemoryGridLayerMetadata<MD>, Vec<Option<C>>) {
-        (self.metadata, self.chunks)
+    pub fn deconstruct(self) -> Vec<Option<C>> {
+        self.chunks
     }
 }
 impl<D: Sized, C: From<&mut [D]>, MD: Sized, VE: VoxelTypeEnum> VirtualMemoryGrid<VE> for VirtualMemoryGridForLayer<D, C, MD> {
     fn load_or_generate_tlc(&self, voxel_output: &mut ChunkVoxelIDs, tlc: TLCPos<i64>) {
-        todo!()
-    }
 
-    fn reload_all(&mut self) {
-        todo!()
     }
 }
 
@@ -133,4 +131,8 @@ impl<E: Sized> MemoryGridLayerMetadata<E> {
     pub fn virtual_grid_pos_for_index(&self, index: usize, vgrid_size: usize) -> TLCVector<usize> {
         self.virtual_grid_pos_for_grid_pos(TLCVector(pos_for_index(index, self.size)), vgrid_size)
     }
+}
+
+pub trait VirtualGridChunkData<D> {
+    fn new(slice: &mut [D], loaded: bool) -> Self;
 }

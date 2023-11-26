@@ -3,12 +3,12 @@ use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommand
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, CopyBufferInfo, SecondaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::DescriptorSetAllocator;
 use vulkano::memory::allocator::MemoryAllocator;
-use winit::window::CursorGrabMode;
+use winit::window::{CursorGrabMode, Window};
 
 
 pub mod context;
 pub mod buffers;
-mod swapchain;
+pub mod swapchain;
 pub mod component;
 mod pipeline;
 
@@ -30,12 +30,13 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
     pub fn new(
         context: Context,
         swapchain_pipeline_params: SwapchainPipelineParams<DSA, CBA>,
+        window: &Window,
         component_set: D,
     ) -> Self {
         let swapchain_pipeline = SwapchainPipeline::new(
             Arc::clone(&context.device),
             Arc::clone(&context.compute_queue),
-            context.window.inner_size(),
+            window.inner_size(),
             component_set.list_all_components(),
             Arc::clone(&context.physical_device),
             Arc::clone(&context.surface),
@@ -74,9 +75,9 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
         }
     }
 
-    pub fn recreate_swapchain(&mut self, camera: &mut Camera, window_resized: bool) {
-        let new_dimensions = self.context.window.inner_size();
-        self.context.window.set_cursor_grab(CursorGrabMode::Confined).unwrap_or_default();
+    pub fn recreate_swapchain(&mut self, camera: &mut Camera, window: &mut Window, window_resized: bool) {
+        let new_dimensions = window.inner_size();
+        window.set_cursor_grab(CursorGrabMode::Confined).unwrap_or_default();
         camera.resolution = (new_dimensions.width, new_dimensions.height);
 
         self.swapchain_pipeline.recreate(&new_dimensions, self.data.list_all_components(), window_resized);

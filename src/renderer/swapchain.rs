@@ -13,11 +13,11 @@ use crate::renderer::pipeline::ComputeRenderPipeline;
 
 
 pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {
-    subgroup_width: usize,
-    subgroup_height: usize,
-    shader: Arc<ShaderModule>,
-    descriptor_set_allocator: DSA,
-    command_buffer_allocator: CBA,
+    pub subgroup_width: usize,
+    pub subgroup_height: usize,
+    pub shader: Arc<ShaderModule>,
+    pub descriptor_set_allocator: DSA,
+    pub command_buffer_allocator: CBA,
 }
 
 pub struct SwapchainPipeline<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {

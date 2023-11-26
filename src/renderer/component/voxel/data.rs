@@ -13,15 +13,15 @@ impl VoxelTypeIDs {
 
 #[derive(BufferContents, Clone, Copy)]
 #[repr(C)]
-pub struct BlockBitmask {
+pub struct VoxelBitmask {
     pub mask: u128,
 }
 
-impl BlockBitmask {
+impl VoxelBitmask {
     pub const BITS_PER_VOXEL: usize = 8;
 }
 
-impl Display for BlockBitmask {
+impl Display for VoxelBitmask {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:#0128b}", self.mask)
     }

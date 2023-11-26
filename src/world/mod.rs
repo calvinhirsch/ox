@@ -38,21 +38,21 @@ struct WorldMetadata {
 }
 
 pub struct World<VE: VoxelTypeEnum, VMG: VirtualMemoryGrid<VE>, MG: PhysicalMemoryGrid<VE, VMG>> {
-    mem_grid: MG,
-    camera: Camera,
+    pub mem_grid: MG,
+    pub camera: Camera,
     metadata: WorldMetadata,
 }
 
 pub struct WorldEditor<'a, VE: VoxelTypeEnum, MG: VirtualMemoryGrid<VE>> {
-    virtual_mem_grid: MG,
-    camera: &'a mut Camera,
-    metadata: &'a mut WorldMetadata,
+    pub virtual_mem_grid: MG,
+    pub camera: &'a mut Camera,
+    // metadata: &'a mut WorldMetadata,
 }
 impl<'a, VE: VoxelTypeEnum, MG: VirtualMemoryGrid<VE>> WorldEditor<'a, VE, MG> {
     fn new<VMG: VirtualMemoryGrid<VE>>(world: &mut World<VE, VMG, MG>) -> Self {
         WorldEditor {
             virtual_mem_grid: world.mem_grid.as_virtual(),
-            metadata: &mut world.metadata,
+            // metadata: &mut world.metadata,
             camera: &mut world.camera,
         }
     }

@@ -1,8 +1,8 @@
 use std::f32::consts::PI;
 use std::time::Duration;
 use cgmath::{Angle, InnerSpace, Point3, Rad, Vector3};
-use vulkano::buffer::BufferContents;
-use winit::event::{ElementState, VirtualKeyCode};
+use winit::event::{ElementState};
+use winit::keyboard::{KeyCode};
 
 
 #[derive(Debug)]
@@ -97,30 +97,30 @@ impl CameraController {
         }
     }
 
-    pub fn process_keyboard(&mut self, key: VirtualKeyCode, state: ElementState) -> bool{
+    pub fn process_keyboard(&mut self, key: KeyCode, state: ElementState) -> bool{
         let amount = if state == ElementState::Pressed { 1.0 } else { 0.0 };
         match key {
-            VirtualKeyCode::W | VirtualKeyCode::Up => {
+            KeyCode::KeyW | KeyCode::ArrowUp => {
                 self.amount_forward = amount;
                 true
             }
-            VirtualKeyCode::S | VirtualKeyCode::Down => {
+            KeyCode::KeyS | KeyCode::ArrowDown => {
                 self.amount_backward = amount;
                 true
             }
-            VirtualKeyCode::A | VirtualKeyCode::Left => {
+            KeyCode::KeyA | KeyCode::ArrowLeft => {
                 self.amount_left = amount;
                 true
             }
-            VirtualKeyCode::D | VirtualKeyCode::Right => {
+            KeyCode::KeyD | KeyCode::ArrowRight => {
                 self.amount_right = amount;
                 true
             }
-            VirtualKeyCode::Space => {
+            KeyCode::Space => {
                 self.amount_up = amount;
                 true
             }
-            VirtualKeyCode::LShift => {
+            KeyCode::ShiftLeft => {
                 self.amount_down = amount;
                 true
             }

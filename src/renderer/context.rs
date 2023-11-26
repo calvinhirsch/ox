@@ -11,9 +11,7 @@ use winit::window::{CursorGrabMode, Window, WindowBuilder};
 
 
 pub struct Context {
-    pub window: Window,
     pub instance: Arc<Instance>,
-    pub event_loop: EventLoop<()>,
     pub surface: Arc<Surface>,
     pub physical_device: Arc<PhysicalDevice>,
     pub device: Arc<Device>,
@@ -23,9 +21,8 @@ pub struct Context {
     pub memory_allocator: Arc<StandardMemoryAllocator>,
 }
 impl Context {
-    pub fn new() -> Self {
+    pub fn new(event_loop: &EventLoop<()>) -> (Self, Arc<Window>) {
         let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
-        let event_loop = EventLoop::new();
 
         let required_extensions = Surface::required_extensions(&event_loop);
         let instance = Instance::new(
@@ -46,7 +43,8 @@ impl Context {
 
         let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
         window.set_cursor_grab(CursorGrabMode::Locked).unwrap_or_default();
-        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+
+        let surface = Surface::from_window(Arc::clone(&instance), window).unwrap();
 
         let window = surface
             .object()
@@ -54,7 +52,6 @@ impl Context {
             .clone()
             .downcast::<Window>()
             .unwrap();
-        let dimensions = window.inner_size();
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
@@ -107,16 +104,18 @@ impl Context {
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(Arc::clone(&device)));
 
-        Context {
-            instance,
-            event_loop,
-            surface,
-            physical_device,
-            device,
-            transfer_queue,
-            compute_queue,
-            graphics_queue,
-            memory_allocator,
-        }
+        (
+            Context {
+                instance,
+                surface,
+                physical_device,
+                device,
+                transfer_queue,
+                compute_queue,
+                graphics_queue,
+                memory_allocator,
+            },
+            window,
+        )
     }
 }

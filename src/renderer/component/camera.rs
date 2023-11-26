@@ -2,8 +2,8 @@ use std::sync::Arc;
 use cgmath::{Angle, Array, Point3, Vector3};
 use vulkano::buffer::BufferContents;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::DualBuffer;
-use crate::renderer::component::{DataComponent};
+use crate::renderer::buffers::{BufferScheme, ConstantBuffer, DualBuffer};
+use crate::renderer::component::{DataComponent, DataComponentSet};
 use crate::world::camera::Camera;
 
 
@@ -14,9 +14,11 @@ impl RendererCamera {
     pub fn new(binding: u32, allocator: Arc<dyn MemoryAllocator>) -> Self {
         RendererCamera {
             comp: DataComponent {
-                buffer_scheme: DualBuffer::from_data(CameraUBO::new_blank(),
-                allocator,
-                true),
+                buffer_scheme: DualBuffer::from_data(
+                    CameraUBO::new_blank(),
+                    allocator,
+                    true
+                ),
                 binding,
             }
         }
@@ -25,6 +27,15 @@ impl RendererCamera {
     pub fn update_staging_buffer(&mut self, camera: &Camera) {
         let mut w = self.comp.buffer_scheme.write_staging().unwrap();
         w.update(camera, Point3::<f32>::from_value(0.));
+    }
+}
+impl DataComponentSet for RendererCamera {
+    fn list_dynamic_components(&self) -> Vec<&DataComponent<DualBuffer<dyn BufferContents>>> {
+        vec![&self.comp]
+    }
+
+    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantBuffer<dyn BufferContents>>> {
+        vec![]
     }
 }
 
