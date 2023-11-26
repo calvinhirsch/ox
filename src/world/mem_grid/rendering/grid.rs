@@ -1,17 +1,17 @@
-use cgmath::{Point3, Vector3};
+use cgmath::{Vector3};
 use itertools::Itertools;
 use syn::__private::quote::__private::ext::RepToTokensExt;
+use crate::renderer::{context::Context};
+use crate::renderer::component::voxel::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
-use crate::world::camera::Camera;
-use crate::world::mem_grid::layer::{MemoryGridLayer, MemoryGridLayerMetadata, VirtualMemoryGridForLayer};
 use crate::world::mem_grid::{PhysicalMemoryGrid, VirtualMemoryGrid};
 use crate::world::mem_grid::rendering::gpu_defs::ChunkVoxelIDs;
 use crate::world::TLCPos;
-use super::lod::{BitmaskLayerMetadata, RenderingGridLOD, RenderingGridLODChunkData, RenderingGridLODMetadata, VoxelTypeIdLayerMetadata};
+use super::lod::{LODCreateParams, RenderingGridLOD, RenderingGridLODChunkData, RenderingGridLODMetadata};
 
-struct RenderingMemoryGrid {
+pub struct RenderingMemoryGrid {
     metadata: RenderingMemoryGridMetadata,
-    lods: Vec<Vec<RenderingGridLOD>>
+    lods: Vec<Vec<Option<RenderingGridLOD>>>
 }
 
 struct RenderingMemoryGridMetadata {
@@ -20,108 +20,107 @@ struct RenderingMemoryGridMetadata {
     n_lods: usize,
 }
 
-struct RenderingMemoryGridChunkData {
-    lods: Vec<Vec<RenderingGridLODChunkData>>
+struct RenderingMemoryGridChunkData<'a> {
+    lods: Vec<Vec<Option<RenderingGridLODChunkData<'a>>>>
 }
 
-struct NestedRenderingGridLODMetadata {
-    lod_meta: RenderingGridLODMetadata,
-    bitmask_meta: MemoryGridLayerMetadata<BitmaskLayerMetadata>,
-    voxel_type_id_meta: MemoryGridLayerMetadata<VoxelTypeIdLayerMetadata>,
+pub struct VirtualRenderingMemoryGrid<'a> {
+    metadata: &'a RenderingMemoryGridMetadata,
+    lod_metadata: Vec<Vec<&'a RenderingGridLODMetadata>>,
+    chunks: Vec<RenderingMemoryGridChunkData<'a>>,
 }
 
-struct VirtualRenderingMemoryGrid {
-    metadata: RenderingMemoryGridMetadata,
-    lod_metadata: Vec<Vec<NestedRenderingGridLODMetadata>>,
-    chunks: Vec<RenderingMemoryGridChunkData>,
-}
-
-impl<VE: VoxelTypeEnum> PhysicalMemoryGrid<VE> for RenderingMemoryGrid {
-    type Virtual = VirtualRenderingMemoryGrid;
-
-    fn move_camera(&mut self, camera: &mut Camera, tlc_size: usize) {
-        let move_vector = Self::move_camera_for_size(camera, tlc_size, self.metadata.size);
-        self.shift_offsets(move_vector);
+impl RenderingMemoryGrid {
+    fn voxels_per_tlc(chunk_size: usize, n_lvls: usize, lvl: usize, lod: usize) -> usize {
+        chunk_size.pow((n_lvls - lvl) as u32).to_le() >> (lod*3)
     }
 
+    pub fn new(lod_params: Vec<Vec<Option<LODCreateParams>>>, chunk_size: usize, start_tlc: TLCPos<i64>) -> (Self, VoxelData) {
+        let size = lod_params.iter().flatten().filter_map_ok(|p| Some(p?.size)).iter().max().unwrap();
+        let n_lvls = lod_params.len();
+        let n_lods = lod_params.iter().next().unwrap().len();
+
+        let renderer_context = Context::new();
+
+        let (grid_lods, lods) = lod_params
+            .into_iter().enumerate().map(|(lvl, lvl_sizes)|
+            lvl_sizes.into_iter().enumerate().map(|(lod, params)| {
+                let voxels_per_tlc = Self::voxels_per_tlc(chunk_size, n_lvls, lvl, lod);
+                RenderingGridLOD::new(
+                    params?,
+                    voxels_per_tlc,
+                    start_tlc,
+                    renderer_context.memory_allocator,
+                )
+            }).unzip()
+        ).unzip();
+
+        (
+            RenderingMemoryGrid {
+                lods: grid_lods,
+                metadata: RenderingMemoryGridMetadata { size, n_lvls, n_lods }
+            },
+            VoxelData::new(lods)
+        )
+    }
+
+    pub fn set_updated_regions(&mut self, renderer_voxel_data: &mut VoxelData) {
+        let updated_regions = self.lods.iter_mut().map(|lod_o|
+            match lod_o {
+                None => None,
+                Some(lod) => lod.aggregate_updated_regions(),
+            }
+        ).collect();
+
+        renderer_voxel_data.set_updated_regions(updated_regions);
+    }
+}
+impl<VE: VoxelTypeEnum> PhysicalMemoryGrid<VE, VirtualRenderingMemoryGrid> for RenderingMemoryGrid {
     fn shift_offsets(&mut self, shift: Vector3<i64>) {
         for lod in self.lods.iter_mut().flatten() {
             lod.shift_offsets(shift);
         }
     }
 
-    fn to_virtual(self) -> Self::Virtual {
-        self.to_virtual_for_size(self.metadata.size)
+    fn size(&self) -> usize {
+        self.metadata.size
     }
 
-    fn to_virtual_for_size(self, grid_size: usize) -> Self::Virtual {
-        let (lod_meta, v_lods) = self.lods.map(|lvl_lods|
+    fn as_virtual(self) -> VirtualRenderingMemoryGrid {
+        self.as_virtual_for_size(self.metadata.size)
+    }
+
+    fn as_virtual_for_size(self, grid_size: usize) -> VirtualRenderingMemoryGrid {
+        let (lod_metadata, v_lods) = self.lods.map(|lvl_lods|
             lvl_lods.map(|lod_o| {
                 match lod_o {
                     None => (None, None),
-                    Some(lod) => (Some(lod.meta), Some(lod.to_virtual_for_size(grid_size).into_iter())),
+                    Some(lod) => {
+                        let (lod_meta, chunks) = lod.as_virtual_for_size(grid_size).deconstruct();
+                        (
+                            lod_meta,
+                            chunks
+                        )
+                    }
                 }
             }).unzip()
         ).unzip();
 
         VirtualRenderingMemoryGrid {
-            metadata: self.metadata,
-            lod_metadata: lod_meta,
+            metadata: &self.metadata,
+            lod_metadata,
             chunks: LODSplitter(v_lods).into_iter().collect(),
         }
-
     }
 }
 
 impl<VE: VoxelTypeEnum> VirtualMemoryGrid<VE> for VirtualRenderingMemoryGrid {
-    type Physical = RenderingMemoryGrid;
-
     fn load_or_generate_tlc(&self, voxel_output: &mut ChunkVoxelIDs, tlc: TLCPos<i64>) {
         todo!()
     }
 
     fn reload_all(&mut self) {
         todo!()
-    }
-
-    fn set_voxel(&mut self, position: Point3<usize>, voxel_type: VE) -> Option<()> {
-        todo!()
-    }
-
-    fn lock(self) -> Option<Self::Physical> {
-        // ENHANCEMENT: Probably a nicer way to do this
-        let mut grid = vec![vec![vec![None; self.chunks.len()]; self.metadata.n_lvls]; self.metadata.n_lods];
-        for (i, chunk) in self.chunks.enumerate() {
-            for (lvl, lvl_lods) in chunk.lods.enumerate() {
-                for (lod, data) in lvl_lods.enumerate() {
-                    grid[lvl][lod][i] = data;
-                }
-            }
-        }
-
-        Some(
-            RenderingMemoryGrid {
-                metadata: self.metadata,
-                lods: self.lod_metadata.into_iter().zip(grid.into_iter())
-                    .map(|(lvl_metas, lvl_lods)|
-                    lvl_metas.into_iter().zip(lvl_lods.into_iter())
-                        .map(|(meta, data)| {
-                            let (chunk_bitmasks, chunk_voxel_ids) = data.into_iter().filter_map_ok(|d|
-                                Some((d?.bitmask, d?.voxel_id_types))
-                            ).unzip();
-                            RenderingGridLOD::new(
-                                meta.lod_meta,
-                                MemoryGridLayer::new_raw(meta.bitmask_meta, chunk_bitmasks),
-                                match chunk_voxel_ids {
-                                    None => None,
-                                    Some(chunks) => MemoryGridLayer::new_raw(meta.voxel_type_id_meta, chunks),
-                                },
-                            )
-                        }
-                    ).collect()
-                ).collect(),
-            }
-        )
     }
 }
 
