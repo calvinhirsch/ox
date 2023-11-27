@@ -1,9 +1,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::mem::discriminant;
 use enum_iterator::{all, Sequence};
 use vulkano::buffer::BufferContents;
-use num_traits::{Bounded, PrimInt};
+use num_traits::{PrimInt};
 
 
 #[derive(BufferContents, Debug, Clone)]

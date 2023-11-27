@@ -8,15 +8,12 @@ edition = "2021"
 [dependencies]
 vulkano = "0.34.1"
 vulkano-shaders = "0.34.0"
-winit = "0.28.3"
-bitvec = "1.0.1"
-bytemuck = "1.14.0"
-itertools = "0.11.0"
+winit = "0.29.4"
+itertools = "0.12.0"
 num-traits = "0.2.17"
 cgmath = "0.18.0"
 enum-iterator = "1.4.1"
 derive-new = "0.6.0"
-syn = "2.0.39"
 paste = "1.0.14"
 
 [profile.dev]
