@@ -10,13 +10,15 @@ pub const fn pos_index(pos: Vector3<usize>, size: usize) -> usize {
 }
 
 pub const fn amod(n: Vector3<i64>, d: usize) -> Vector3<usize> {
-    (((n % d as i64) + Vector3::<i64>::from_value(d as i64)) % d as i64).cast::<usize>().unwrap()
+    (((n % d as i64) + Vector3::<i64>::from_value(d as i64)) % d as i64)
+        .cast::<usize>()
+        .unwrap()
 }
 
 pub const fn pos_for_index(index: usize, size: usize) -> Vector3<usize> {
     return Vector3 {
         x: index % size,
-        y: index / (size*size),
-        z: (index % (size*size)) / size,
-    }
+        y: index / (size * size),
+        z: (index % (size * size)) / size,
+    };
 }

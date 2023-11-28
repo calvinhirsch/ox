@@ -1,0 +1,99 @@
+use std::sync::Arc;
+use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, SecondaryAutoCommandBuffer};
+use vulkano::device::{Device, Queue};
+use vulkano::sync;
+use vulkano::sync::future::FenceSignalFuture;
+use vulkano::sync::GpuFuture;
+use crate::renderer::component::DataComponentSet;
+use crate::renderer::context::Context;
+
+pub struct TransferManager<CBA: CommandBufferAllocator> {
+    always_transfer_command_buffer: Arc<SecondaryAutoCommandBuffer>,
+    dynamic_command_buffer_allocator: CBA,
+    transfer_fence: Option<Arc<FenceSignalFuture<dyn GpuFuture>>>
+}
+
+impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
+    pub fn new(
+        context: &Context,
+        component_set: &mut impl DataComponentSet,
+        dynamic_command_buffer_allocator: CBA,
+    ) -> TransferManager<CBA> {
+        let always_transfer_command_buffer = {
+            let command_buffer_allocator = StandardCommandBufferAllocator::new(
+                context.device.clone(),
+                StandardCommandBufferAllocatorCreateInfo {
+                    secondary_buffer_count: 2,
+                    ..Default::default()
+                },
+            );
+
+            let mut builder = AutoCommandBufferBuilder::secondary(
+                &command_buffer_allocator,
+                context.transfer_queue.queue_family_index(),
+                CommandBufferUsage::MultipleSubmit,
+                CommandBufferInheritanceInfo::default(),
+            ).unwrap();
+
+            for component in component_set.dynamic_components_mut() {
+                component.buffer_scheme.record_repeated_transfer(&mut builder);
+            }
+
+            builder.build().unwrap()
+        };
+
+        TransferManager {
+            always_transfer_command_buffer,
+            transfer_fence: None,
+            dynamic_command_buffer_allocator,
+        }
+    }
+
+    pub fn start_transfer(
+        &mut self,
+        device: Arc<Device>,
+        queue: Arc<Queue>,
+        component_set: &mut impl DataComponentSet
+    ) -> &Arc<FenceSignalFuture<dyn GpuFuture>> {
+        let previous_transfer_future = match self.transfer_fence.clone() {
+            None => {
+                let mut now = sync::now(device);
+                now.cleanup_finished();
+                now.boxed()
+            },
+            Some(future) => future.boxed(),
+        };
+
+        let transfer_command_buffer = {
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &self.dynamic_command_buffer_allocator,
+                queue.queue_family_index(),
+                CommandBufferUsage::MultipleSubmit,
+            ).unwrap();
+
+            builder.execute_commands(self.always_transfer_command_buffer).unwrap();
+
+            for component in component_set.dynamic_components_mut() {
+                component.buffer_scheme.record_transfer_jit(&mut builder);
+            }
+
+            builder.build().unwrap()
+        };
+
+        let transfer_future = previous_transfer_future
+            .then_execute(queue, transfer_command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush();
+
+        self.transfer_fence = match transfer_future {
+            Ok(value) => Some(Arc::new(value)),
+            Err(e) => {
+                println!("failed to flush future: {e:?}");
+                None
+            }
+        };
+
+        &self.transfer_fence.unwrap()
+    }
+}

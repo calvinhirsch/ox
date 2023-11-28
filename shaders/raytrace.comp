@@ -35,7 +35,6 @@ const uint BLOCK_CAPACITY_LVL[N_CHUNK_LVLS] = {
 
 const uint MATERIALS_PER_VEC4 = 128 / N_MATERIAL_ID_BITS;
 const uint MATERIALS_PER_INT = 32 / N_MATERIAL_ID_BITS;
-const uint N_MATERIALS = 1 << N_MATERIAL_ID_BITS;
 
 const float MAX_SUN_EMISSION = 1.5;
 const float MIN_SUM_EMISSION = 0.75;
@@ -102,7 +101,7 @@ layout (set = 0, binding = 9, scalar) readonly buffer VoxelBitmask0LOD1 {
 } chunk_bitmasks1;
 
 // LOD 2, down to chunk level 0
-const uint CBM0_LOD1_BLOCKS = (RENDER_N_TLCS[0]+1)*min(WORLD_HEIGHT/CHUNK_LVL_BLOCK_SIZE[0], RENDER_N_TLCS[0]+1)*(RENDER_N_TLCS[0]+1);
+const uint CBM0_LOD1_BLOCKS = (RENDER_N_TLCS_LOD[0]+1)*min(WORLD_HEIGHT/CHUNK_LVL_BLOCK_SIZE[0], RENDER_N_TLCS_LOD[0]+1)*(RENDER_N_TLCS_LOD[0]+1);
 layout (set = 0, binding = 10, scalar) readonly buffer VoxelBitmask0LOD2 {
     uvec4 mask[BLOCK_CAPACITY[2] / 128];
 } chunk_bitmasks2;
@@ -170,7 +169,7 @@ uint indexv(uvec3 idx, uint n) {
 uint block[N_CHUNK_LVLS+1][3];
 TLCMetadata tlc_meta = TLCMetadata(0, 0);
 
-ivec3 abs_block(uint lvl, uint axis_a, uint axis_b, uint axis_c) {
+uvec3 abs_block(uint lvl, uint axis_a, uint axis_b, uint axis_c) {
     // Get the absolute position of the current block at lvl in lvl units
     uvec3 pt = uvec3(block[N_CHUNK_LVLS][axis_a], block[N_CHUNK_LVLS][axis_b], block[N_CHUNK_LVLS][axis_c]);
     if (lvl == 2) {
@@ -280,7 +279,7 @@ uint chunk_botleft_index(uint lvl) {
     return idx * CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
 }
 
-ivec3 chunk_abs_botleft_block(uint lvl, uint axis_a, uint axis_b, uint axis_c) {
+uvec3 chunk_abs_botleft_block(uint lvl, uint axis_a, uint axis_b, uint axis_c) {
     // Get the absolute position of the bottom left of the current chunk at lvl+1 in units of the current lvl in abc axes
     if (lvl == 2) {
         return ivec3(0, 0, 0);
@@ -414,7 +413,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
         uint safety_limit = 0;
         for (; safety_limit < 100 && !done; safety_limit++) {
             uint chunk_botleft_idx = chunk_botleft_index(lvl);
-            ivec3 chunk_botleft_blk = chunk_abs_botleft_block(lvl, axis_a, axis_b, axis_c);
+            uvec3 chunk_botleft_blk = chunk_abs_botleft_block(lvl, axis_a, axis_b, axis_c);
 
             // Establish search boundaries based on current chunk lvl
 

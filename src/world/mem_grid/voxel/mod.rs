@@ -1,7 +1,7 @@
 pub(crate) mod gpu_defs;
-mod lod;
 pub mod grid;
+mod lod;
 
-pub use gpu_defs::{ChunkVoxelIDs, ChunkBitmask};
-pub use grid::{VoxelMemoryGrid, VirtualVoxelMemoryGrid};
-pub use lod::{VoxelLODCreateParams};
+pub use gpu_defs::{ChunkBitmask, ChunkVoxelIDs};
+pub use grid::{VirtualVoxelMemoryGrid, VoxelMemoryGrid};
+pub use lod::VoxelLODCreateParams;

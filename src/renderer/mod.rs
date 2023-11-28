@@ -1,89 +1,108 @@
 use std::sync::Arc;
-use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, CopyBufferInfo, SecondaryAutoCommandBuffer};
+use std::time::Duration;
+use vulkano::command_buffer::allocator::{
+    CommandBufferAllocator, StandardCommandBufferAllocator,
+    StandardCommandBufferAllocatorCreateInfo,
+};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage,
+    SecondaryAutoCommandBuffer,
+};
 use vulkano::descriptor_set::allocator::DescriptorSetAllocator;
-use vulkano::memory::allocator::MemoryAllocator;
 use winit::window::{CursorGrabMode, Window};
 
-
-pub mod context;
 pub mod buffers;
-pub mod swapchain;
 pub mod component;
+pub mod context;
 mod pipeline;
+pub mod swapchain;
+mod transfer;
+pub mod utils;
 
-use swapchain::SwapchainPipeline;
-use context::Context;
 use crate::renderer::component::DataComponentSet;
 use crate::renderer::swapchain::SwapchainPipelineParams;
 use crate::world::camera::Camera;
+use context::Context;
+use swapchain::SwapchainPipeline;
+use crate::renderer::transfer::TransferManager;
 
-
-pub struct Renderer<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {
-    pub data: D,
+pub struct Renderer<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator, DCBA: CommandBufferAllocator> {
+    components: D,
     context: Context,
     swapchain_pipeline: SwapchainPipeline<DSA, CBA>,
-    always_transfer_command_buffer: Arc<SecondaryAutoCommandBuffer>,
+    transfer_manager: TransferManager<DCBA>,
 }
 
-impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> Renderer<D, DSA, CBA> {
+pub struct RendererComponentEditor<D> {
+    pub components: D,
+}
+
+impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator, DCBA: CommandBufferAllocator>
+    Renderer<D, DSA, CBA, DCBA>
+{
     pub fn new(
         context: Context,
         swapchain_pipeline_params: SwapchainPipelineParams<DSA, CBA>,
         window: &Window,
         component_set: D,
+        dynamic_command_buffer_allocator: impl CommandBufferAllocator,
     ) -> Self {
-        let swapchain_pipeline = SwapchainPipeline::new(
-            Arc::clone(&context.device),
-            Arc::clone(&context.compute_queue),
-            window.inner_size(),
-            component_set.list_all_components(),
-            Arc::clone(&context.physical_device),
-            Arc::clone(&context.surface),
-            swapchain_pipeline_params,
-        );
-
-        let always_transfer_command_buffer = {
-            let command_buffer_allocator =
-                StandardCommandBufferAllocator::new(
-                    context.device.clone(),
-                    StandardCommandBufferAllocatorCreateInfo {
-                        secondary_buffer_count: 2,
-                        ..Default::default()
-                    }
-                );
-            
-            let mut builder = AutoCommandBufferBuilder::secondary(
-                &command_buffer_allocator,
-                context.transfer_queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-                CommandBufferInheritanceInfo::default(),
-            ).unwrap();
-            
-            for component in component_set.list_dynamic_components() {
-                component.buffer_scheme.record_transfer(&mut builder);
-            }
-
-            builder.build().unwrap()
-        };
-
         Renderer {
-            data,
+            components: component_set,
             context,
-            swapchain_pipeline,
-            always_transfer_command_buffer,
+            swapchain_pipeline: SwapchainPipeline::new(
+                Arc::clone(&context.device),
+                Arc::clone(&context.compute_queue),
+                Arc::clone(&context.graphics_queue),
+                window.inner_size(),
+                component_set.list_all_components(),
+                Arc::clone(&context.physical_device),
+                Arc::clone(&context.surface),
+                swapchain_pipeline_params,
+            ),
+            transfer_manager: TransferManager::new(
+                &context,
+                component_set.list_all_components(),
+                dynamic_command_buffer_allocator,
+            ),
         }
     }
 
-    pub fn recreate_swapchain(&mut self, camera: &mut Camera, window: &mut Window, window_resized: bool) {
+    pub fn window_resized(
+        &mut self,
+        camera: &mut Camera,
+        window: &mut Window,
+    ) {
         let new_dimensions = window.inner_size();
-        window.set_cursor_grab(CursorGrabMode::Confined).unwrap_or_default();
+        window
+            .set_cursor_grab(CursorGrabMode::Confined)
+            .unwrap_or_default();
         camera.resolution = (new_dimensions.width, new_dimensions.height);
 
-        self.swapchain_pipeline.recreate(&new_dimensions, self.data.list_all_components(), window_resized);
+        self.swapchain_pipeline.resize(
+            &new_dimensions,
+            self.components.list_all_components(),
+        );
+    }
+
+    pub fn recreate_swapchain(&mut self) {
+        self.swapchain_pipeline.recreate();
+    }
+
+    pub fn start_updating_staging_buffers(&mut self) -> RendererComponentEditor<D> {
+        self.transfer_manager.wait_for_staging_buffers();
+        RendererComponentEditor { components: &mut self.components }
     }
 
     pub fn draw_frame(&mut self) {
+        self.swapchain_pipeline.wait_for_compute_done(Some(Duration::seconds(3)));
 
+        let transfer_fence = self.transfer_manager.start_transfer(
+            Arc::clone(&self.context.device),
+            Arc::clone(&self.context.transfer_queue),
+            &mut self.components,
+        );
+
+        self.swapchain_pipeline.present(Arc::clone(&self.context.device), transfer_fence);
     }
 }

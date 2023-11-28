@@ -1,11 +1,10 @@
-use std::sync::Arc;
-use cgmath::{Angle, Array, Point3, Vector3};
-use vulkano::buffer::BufferContents;
-use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::{BufferScheme, ConstantBuffer, DualBuffer};
+use crate::renderer::buffers::{BufferScheme, ConstantDeviceLocalBuffer, DualBuffer};
 use crate::renderer::component::{DataComponent, DataComponentSet};
 use crate::world::camera::Camera;
-
+use cgmath::{Angle, Array, Point3, Vector3};
+use std::sync::Arc;
+use vulkano::buffer::BufferContents;
+use vulkano::memory::allocator::MemoryAllocator;
 
 pub struct RendererCamera {
     comp: DataComponent<DualBuffer<CameraUBO>>,
@@ -14,13 +13,9 @@ impl RendererCamera {
     pub fn new(binding: u32, allocator: Arc<dyn MemoryAllocator>) -> Self {
         RendererCamera {
             comp: DataComponent {
-                buffer_scheme: DualBuffer::from_data(
-                    CameraUBO::new_blank(),
-                    allocator,
-                    true
-                ),
+                buffer_scheme: DualBuffer::from_data(CameraUBO::new_blank(), allocator, true),
                 binding,
-            }
+            },
         }
     }
 
@@ -34,11 +29,10 @@ impl DataComponentSet for RendererCamera {
         vec![&self.comp]
     }
 
-    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantBuffer<dyn BufferContents>>> {
+    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
         vec![]
     }
 }
-
 
 /// Uniform buffer object containing camera info that gets passed to the GPU
 #[derive(BufferContents, Debug, Clone)]
@@ -48,9 +42,9 @@ pub struct CameraUBO {
     _pad1: f32,
     viewport_center: [f32; 3],
     _pad2: f32,
-    right_dir: [f32; 3],  // should be normalized
+    right_dir: [f32; 3], // should be normalized
     _pad3: f32,
-    up_dir: [f32; 3],  // should be normalized
+    up_dir: [f32; 3], // should be normalized
     _pad4: f32,
 }
 
@@ -69,7 +63,7 @@ impl CameraUBO {
     }
 
     pub fn new(camera: &Camera, origin: Point3<f32>) -> Self {
-        let mut s= CameraUBO::new_blank();
+        let mut s = CameraUBO::new_blank();
         s.update(camera, origin);
         s
     }
@@ -87,22 +81,35 @@ impl CameraUBO {
         let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
         let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
 
-        self.viewport_center = (camera.position - origin + Vector3 {
-            x: yaw_cos * pitch_cos * camera.viewport_dist,
-            y: -pitch_sin * camera.viewport_dist,
-            z: -yaw_sin * pitch_cos * camera.viewport_dist,
-        }).try_into().unwrap();
+        self.viewport_center = (camera.position - origin
+            + Vector3 {
+                x: yaw_cos * pitch_cos * camera.viewport_dist,
+                y: -pitch_sin * camera.viewport_dist,
+                z: -yaw_sin * pitch_cos * camera.viewport_dist,
+            })
+        .try_into()
+        .unwrap();
 
         self.right_dir = Vector3 {
             x: -yaw_sin * viewport_half_dims.0,
             y: 0.,
             z: -yaw_cos * viewport_half_dims.0,
-        }.try_into().unwrap();
+        }
+        .try_into()
+        .unwrap();
 
         self.up_dir = Vector3 {
-            x: yaw_cos * (if camera.pitch > Rad(0.) {1.} else {-1.}) * (1. - pitch_cos) * viewport_half_dims.1,
+            x: yaw_cos
+                * (if camera.pitch > Rad(0.) { 1. } else { -1. })
+                * (1. - pitch_cos)
+                * viewport_half_dims.1,
             y: pitch_cos * viewport_half_dims.1,
-            z: yaw_sin * (if camera.pitch > Rad(0.) {-1.} else {1.}) * (1. - pitch_cos) * viewport_half_dims.1,
-        }.try_into().unwrap();
+            z: yaw_sin
+                * (if camera.pitch > Rad(0.) { -1. } else { 1. })
+                * (1. - pitch_cos)
+                * viewport_half_dims.1,
+        }
+        .try_into()
+        .unwrap();
     }
 }

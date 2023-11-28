@@ -1,20 +1,24 @@
-use cgmath::{Array, Vector3};
-use crate::voxel_type::VoxelTypeEnum;
-use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxelIDs;
-use crate::world::{TLCPos};
+use cgmath::Vector3;
 
-pub mod voxel;
 pub mod layer;
-mod utils;
 mod layer_set;
+mod utils;
+pub mod voxel;
 
-
-pub trait PhysicalMemoryGrid<V> {
+pub trait PhysicalMemoryGrid {
     fn shift_offsets(&mut self, shift: Vector3<i64>);
 
     fn size(&self) -> usize;
+}
 
-    fn as_virtual(&mut self) -> Self::Virtual { self.as_virtual_for_size(self.size()) }
+pub struct VirtualMemoryGrid<C> {
+    pub chunks: Vec<C>,
+}
 
-    fn as_virtual_for_size(&mut self, grid_size: usize) -> V;
+pub trait AsVirtualMemoryGrid<C>: PhysicalMemoryGrid {
+    fn as_virtual(&mut self) -> VirtualMemoryGrid<C> {
+        self.as_virtual_for_size(self.size())
+    }
+
+    fn as_virtual_for_size(&mut self, grid_size: usize) -> VirtualMemoryGrid<C>;
 }
