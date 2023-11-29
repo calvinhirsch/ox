@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use super::lod::{VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams, VoxelLODMetadata};
 use crate::renderer::component::voxels::VoxelData;
-use crate::world::mem_grid::{PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::mem_grid::{FromVirtual, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector, VoxelPos};
 use derive_more::Deref;
 use itertools::Itertools;
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::world::mem_grid::layer::LayerChunkLoadingQueue;
+use crate::world::mem_grid::utils::cubed;
 
 
 #[derive(Deref)]
@@ -104,18 +105,24 @@ impl VoxelMemoryGrid {
 impl PhysicalMemoryGrid<VoxelMemoryGridData, VoxelMemoryGridMetadata> for VoxelMemoryGrid {
     type ChunkLoadQueue = VoxelMemoryGridChunkLoadingQueue;
 
-    fn shift(&mut self, shift: TLCVector<i32>, load: TLCVector<i32>) -> Self::ChunkLoadQueue {
-        for lod in self.data.lods.iter_mut().flatten() {
-            lod.shift_offsets(shift, load);
-        }
-        self.data.lods.iter_mut().map(|lvl_lods|
-            lvl_lods.iter_mut().map(|lod_o|
-                match lod_o {
-                    None => None,
-                    Some(lod) => Some(lod.shift(shift, load)),
-                }
+    fn queue_load_all(&mut self) -> Self::ChunkLoadQueue {
+        VoxelMemoryGridChunkLoadingQueue {
+            lods:  self.data.lods.iter_mut().map(|lvl_lods|
+                lvl_lods.iter_mut().map(|lod_o|
+                    lod_o.and_then(|mut lod| Some(lod.queue_load_all()))
+                ).collect()
             ).collect()
-        ).collect()
+        }
+    }
+
+    fn shift(&mut self, shift: TLCVector<i32>, load: TLCVector<i32>) -> Self::ChunkLoadQueue {
+        VoxelMemoryGridChunkLoadingQueue {
+            lods:  self.data.lods.iter_mut().map(|lvl_lods|
+                lvl_lods.iter_mut().map(|lod_o|
+                    lod_o.and_then(|mut lod| Some(lod.shift(shift, load)))
+                ).collect()
+            ).collect()
+        }
     }
 }
 impl ToVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid {
@@ -131,9 +138,51 @@ impl ToVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for Vox
             })
             .collect();
 
-        VirtualMemoryGrid::<VoxelMemoryGridChunkData<'a>> {
-            chunks: LODSplitter(v_lods).into_iter().collect(),
-        }    }
+        VirtualMemoryGridStruct::new(
+            LODSplitter(v_lods).into_iter().collect(),
+            VirtualVoxelMemoryGridMetadata {
+                this: self.0.metadata,
+                lods: vec![],
+            }
+        )
+    }
+}
+impl FromVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid {
+    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata>, grid_size: usize) -> Self {
+        let (data, metadata) = virtual_grid.deconstruct();
+
+        let mut grids = metadata.lods.iter().map(|lvl_meta|
+            lvl_meta.iter().map(|meta|
+                meta.and_then(|m| Some(vec![None; cubed(grid_size)]))
+            ).collect()
+        ).collect();
+
+        for (i, chunk_o) in data.into_iter().enumerate() {
+            if let Some(chunk) = chunk_o {
+                for (lvl, chunk_lvl) in chunk.lods.into_iter().enumerate() {
+                    for (lod, chunk_lod) in chunk_lvl.into_iter().enumerate() {
+                        if let Some(_) = chunk_lod {
+                           grids[lvl][lod].unwrap()[i] = chunk_lod;
+                        }
+                    }
+                }
+            }
+        }
+
+        VoxelMemoryGrid(
+            PhysicalMemoryGridStruct::new(
+                VoxelMemoryGridData {
+                    lods: grids.into_iter().zip(metadata.lods.into_iter()).map(|(grid, meta)|
+                        VirtualMemoryGridStruct::new(
+                            grid,
+                            meta,
+                        )
+                    )
+                },
+                metadata.this,
+            )
+        )
+    }
 }
 
 struct LODSplitter<I: Iterator>(Vec<Vec<Option<I>>>);

@@ -13,8 +13,7 @@ pub mod camera;
 mod loader;
 
 use camera::{Camera, controller::CameraController};
-use crate::world::mem_grid::{AsVirtualMemoryGrid, ChunkLoader, VirtualMemoryGrid};
-use crate::world::mem_grid::layer::MemoryGridLayerMetadata;
+use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
 
 /// Position in units of top level chunks
 #[derive(Clone, Copy)]
@@ -74,16 +73,20 @@ impl<MG> World<MG> {
     }
 }
 
-impl<MG: PhysicalMemoryGrid> World<MG> {
-    pub fn move_camera(&mut self, camera_controller: &mut impl CameraController, dt: Duration) {
+impl<C, MD: MemoryGridMetadata, MG: PhysicalMemoryGrid<C, MD>> World<MG> {
+    pub fn queue_load_all(&mut self) -> MG::ChunkLoadQueue {
+        self.mem_grid.queue_load_all()
+    }
+
+    pub fn move_camera(&mut self, camera_controller: &mut impl CameraController, dt: Duration) -> MG::ChunkLoadQueue {
         camera_controller.apply(&mut self.camera, dt);
 
-        let move_vector = (self.camera.position / (self.tlc_size as f32))
+        let move_vector = (self.camera.position / (self.metadata.tlc_size as f32))
             .map(|a| a.floor() as i64)
             - Point3::<i64>::from_value(((self.mem_grid.size() - 1) / 2) as i64);
 
         if !move_vector.is_zero() {
-            self.camera.position -= (move_vector * self.tlc_size as i64)
+            self.camera.position -= (move_vector * self.metadata.tlc_size as i64)
                 .cast::<f32>()
                 .unwrap();
         }
@@ -98,15 +101,29 @@ impl<MG: PhysicalMemoryGrid> World<MG> {
             }
         }
 
-        self.mem_grid.shift_offsets(TLCVector(move_vector), VoxelPos(self.camera.position));
+        self.mem_grid.shift_offsets(TLCVector(move_vector), VoxelPos(self.camera.position))
     }
 }
 
-impl<C, MG: AsVirtualMemoryGrid<C>> World<MG> {
-    pub fn unlock(self) -> World<VirtualMemoryGrid<C>> {
-        VirtualMemoryGrid {
-            mem_grid: self.mem_grid.as_virtual(),
+impl<C, MD> World<VirtualMemoryGridStruct<C, MD>> {
+    pub fn chunks(&self) -> &Vec<Option<C>> { &self.mem_grid.chunks }
+    pub fn chunks_mut(&mut self) -> &mut Vec<Option<C>> { &mut self.mem_grid.chunks }
+}
 
+impl<C, MD, MG: ToVirtual<C, MD>> World<MG> {
+    pub fn unlock(self) -> World<VirtualMemoryGridStruct<C, MD>> {
+        World {
+            mem_grid: self.mem_grid.to_virtual(),
+            ..self
+        }
+    }
+}
+
+impl<C, MD, MG: FromVirtual<C, MD>> World<VirtualMemoryGridStruct<C, MD>> {
+    pub fn lock(self) -> World<MG> {
+        World {
+            mem_grid: MG::from_virtual(self.mem_grid),
+            ..self
         }
     }
 }

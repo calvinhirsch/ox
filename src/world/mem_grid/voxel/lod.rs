@@ -173,6 +173,11 @@ impl VoxelLOD {
 impl PhysicalMemoryGrid<Vec<VoxelBitmask>, VoxelLODMetadata> for VoxelLOD {
     type ChunkLoadQueue = LayerChunkLoadingQueue;
 
+    fn queue_load_all(&mut self) -> Self::ChunkLoadQueue {
+        // Because the queues for all three of the layers will be the same size, only need to get one.
+        self.data.bitmask_layer.queue_load_all()
+    }
+
     fn shift(&mut self, shift: TLCVector<i32>, load: TLCVector<i32>) -> Self::ChunkLoadQueue {
         // Because all three of these queues will be the same size, only need to track one.
         self.data.voxel_type_id_layer.and_then(|mut layer| Some(layer.shift(shift, load)));
