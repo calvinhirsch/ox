@@ -1,7 +1,7 @@
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use crate::renderer::component::voxels::lod::RendererVoxelLOD;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
-use crate::world::mem_grid::layer::{MemoryGridLayerChunkData, MemoryGridLayerMetadata, PhysicalMemoryGridLayer, VirtualMemoryGridLayer};
+use crate::world::mem_grid::layer::{LayerChunkLoadingQueue, MemoryGridLayerChunkData, MemoryGridLayerMetadata, PhysicalMemoryGridLayer, VirtualMemoryGridLayer};
 use crate::world::mem_grid::utils::cubed;
 use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxelIDs};
 use crate::world::mem_grid::{FromVirtual, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
@@ -171,11 +171,13 @@ impl VoxelLOD {
 }
 
 impl PhysicalMemoryGrid<Vec<VoxelBitmask>, VoxelLODMetadata> for VoxelLOD {
-    type ChunkLoadQueue = ();
+    type ChunkLoadQueue = LayerChunkLoadingQueue;
 
     fn shift(&mut self, shift: TLCVector<i32>, load: TLCVector<i32>) -> Self::ChunkLoadQueue {
-        self.data.bitmask_layer.shift_offsets(shift, load);
-        self.data.voxel_type_id_layer.shift_offsets(shift, load);
+        // Because all three of these queues will be the same size, only need to track one.
+        self.data.voxel_type_id_layer.and_then(|mut layer| Some(layer.shift(shift, load)));
+        self.data.updated_bitmask_regions_layer.shift(shift, load);
+        self.data.bitmask_layer.shift_offsets(shift, load)
     }
 }
 

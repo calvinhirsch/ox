@@ -1,15 +1,22 @@
-use super::lod::{VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams};
+use std::sync::Arc;
+use super::lod::{VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams, VoxelLODMetadata};
 use crate::renderer::component::voxels::VoxelData;
-use crate::world::mem_grid::{AsVirtualMemoryGrid, PhysicalMemoryGrid, VirtualMemoryGrid};
+use crate::world::mem_grid::{PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector, VoxelPos};
-use cgmath::{Point3, Vector3};
+use derive_more::Deref;
 use itertools::Itertools;
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
+use crate::world::mem_grid::layer::LayerChunkLoadingQueue;
 
-pub struct VoxelMemoryGrid {
-    metadata: VoxelMemoryGridMetadata,
-    lods: Vec<Vec<Option<VoxelLOD>>>,
+
+#[derive(Deref)]
+pub struct VoxelMemoryGrid(PhysicalMemoryGridStruct<VoxelMemoryGridData, VoxelMemoryGridMetadata>);
+#[derive(Deref)]
+pub struct VirtualVoxelMemoryGrid(VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata>);
+
+pub struct VoxelMemoryGridData {
+    lods: Vec<Vec<Option<VoxelLOD>>>
 }
 
 struct VoxelMemoryGridMetadata {
@@ -18,9 +25,19 @@ struct VoxelMemoryGridMetadata {
     n_lods: usize,
 }
 
-pub struct VoxelMemoryGridChunkData<'a> {
-    lods: Vec<Vec<Option<VoxelLODChunkData<'a>>>>,
+struct VirtualVoxelMemoryGridMetadata {
+    this: VoxelMemoryGridMetadata,
+    lods: Vec<Vec<Option<VoxelLODMetadata>>>
 }
+
+pub struct VoxelMemoryGridChunkData {
+    lods: Vec<Vec<Option<VoxelLODChunkData>>>,
+}
+
+pub struct VoxelMemoryGridChunkLoadingQueue {
+    lods: Vec<Vec<Option<LayerChunkLoadingQueue>>>
+}
+
 
 impl VoxelMemoryGrid {
     fn voxels_per_tlc(chunk_size: usize, n_lvls: usize, lvl: usize, lod: usize) -> usize {
@@ -29,9 +46,10 @@ impl VoxelMemoryGrid {
 
     pub fn new(
         lod_params: Vec<Vec<Option<VoxelLODCreateParams>>>,
-        memory_allocator: Box<dyn MemoryAllocator>,
+        memory_allocator: Arc<dyn MemoryAllocator>,
         chunk_size: usize,
         start_tlc: TLCPos<i64>,
+        tlc_size: usize,
     ) -> (Self, VoxelData) {
         let size = lod_params
             .iter()
@@ -52,27 +70,29 @@ impl VoxelMemoryGrid {
                     .enumerate()
                     .map(|(lod, params)| {
                         let voxels_per_tlc = Self::voxels_per_tlc(chunk_size, n_lvls, lvl, lod);
-                        VoxelLOD::new(params?, voxels_per_tlc, start_tlc, memory_allocator)
+                        VoxelLOD::new(params?, voxels_per_tlc, start_tlc, tlc_size, memory_allocator)
                     })
                     .unzip()
             })
             .unzip();
 
         (
-            VoxelMemoryGrid {
-                lods: grid_lods,
-                metadata: VoxelMemoryGridMetadata {
-                    size,
-                    n_lvls,
-                    n_lods,
-                },
-            },
+            VoxelMemoryGrid(
+                PhysicalMemoryGridStruct::new(
+                    VoxelMemoryGridData { lods: grid_lods },
+                    VoxelMemoryGridMetadata {
+                        size,
+                        n_lvls,
+                        n_lods,
+                    },
+                )
+            ),
             VoxelData::new(lods),
         )
     }
 
     pub fn get_updates(&mut self) -> Vec<Vec<Option<VoxelLODUpdate>>> {
-        self.lods
+        self.data.lods
             .iter_mut()
             .flat_map(|lod_o| match lod_o {
                 None => None,
@@ -81,28 +101,26 @@ impl VoxelMemoryGrid {
             .collect()
     }
 }
-impl PhysicalMemoryGrid for VoxelMemoryGrid {
-    fn shift_offsets(&mut self, shift: TLCVector<i64>, new_cam_pos: VoxelPos<f32>) {
-        for lod in self.lods.iter_mut().flatten() {
-            lod.shift_offsets(shift, new_cam_pos);
-        }
-    }
+impl PhysicalMemoryGrid<VoxelMemoryGridData, VoxelMemoryGridMetadata> for VoxelMemoryGrid {
+    type ChunkLoadQueue = VoxelMemoryGridChunkLoadingQueue;
 
-    fn size(&self) -> usize {
-        self.metadata.size
+    fn shift(&mut self, shift: TLCVector<i32>, load: TLCVector<i32>) -> Self::ChunkLoadQueue {
+        for lod in self.data.lods.iter_mut().flatten() {
+            lod.shift_offsets(shift, load);
+        }
+        self.data.lods.iter_mut().map(|lvl_lods|
+            lvl_lods.iter_mut().map(|lod_o|
+                match lod_o {
+                    None => None,
+                    Some(lod) => Some(lod.shift(shift, load)),
+                }
+            ).collect()
+        ).collect()
     }
 }
-impl<'a> AsVirtualMemoryGrid<VirtualMemoryGrid<VoxelMemoryGridChunkData<'a>>> for VoxelMemoryGrid {
-    fn as_virtual(self) -> VirtualMemoryGrid<VoxelMemoryGridChunkData<'a>> {
-        self.as_virtual_for_size(self.metadata.size)
-    }
-
-    fn as_virtual_for_size(
-        self,
-        grid_size: usize,
-    ) -> VirtualMemoryGrid<VoxelMemoryGridChunkData<'a>> {
-        let v_lods = self
-            .lods
+impl ToVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid {
+    fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<Option<VoxelMemoryGridChunkData>, VirtualVoxelMemoryGridMetadata> {
+        let v_lods = self.0.data.lods
             .map(|lvl_lods| {
                 lvl_lods
                     .map(|lod_o| match lod_o {
@@ -115,8 +133,7 @@ impl<'a> AsVirtualMemoryGrid<VirtualMemoryGrid<VoxelMemoryGridChunkData<'a>>> fo
 
         VirtualMemoryGrid::<VoxelMemoryGridChunkData<'a>> {
             chunks: LODSplitter(v_lods).into_iter().collect(),
-        }
-    }
+        }    }
 }
 
 struct LODSplitter<I: Iterator>(Vec<Vec<Option<I>>>);
