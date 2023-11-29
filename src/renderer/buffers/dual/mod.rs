@@ -140,6 +140,13 @@ impl<T: BufferContents> DualBuffer<T> {
         ConstantDeviceLocalBuffer::new(device_local)
     }
 
+    pub fn with_full_copy(self) -> DualBufferWithFullCopy<T> {
+        DualBufferWithFullCopy::new(
+            self.staging,
+            self.device_local,
+        )
+    }
+
     pub fn with_copy_regions(self) -> DualBufferWithDynamicCopyRegions<T> {
         DualBufferWithDynamicCopyRegions::new(
             self.staging,

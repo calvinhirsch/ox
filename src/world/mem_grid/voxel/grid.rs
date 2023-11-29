@@ -1,10 +1,11 @@
 use super::lod::{VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams};
 use crate::renderer::component::voxels::VoxelData;
 use crate::world::mem_grid::{AsVirtualMemoryGrid, PhysicalMemoryGrid, VirtualMemoryGrid};
-use crate::world::TLCPos;
-use cgmath::Vector3;
+use crate::world::{TLCPos, TLCVector, VoxelPos};
+use cgmath::{Point3, Vector3};
 use itertools::Itertools;
 use vulkano::memory::allocator::MemoryAllocator;
+use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 
 pub struct VoxelMemoryGrid {
     metadata: VoxelMemoryGridMetadata,
@@ -70,23 +71,20 @@ impl VoxelMemoryGrid {
         )
     }
 
-    pub fn set_renderer_updated_regions(&mut self, renderer_voxel_data: &mut VoxelData) {
-        let updated_regions = self
-            .lods
+    pub fn get_updates(&mut self) -> Vec<Vec<Option<VoxelLODUpdate>>> {
+        self.lods
             .iter_mut()
-            .map(|lod_o| match lod_o {
+            .flat_map(|lod_o| match lod_o {
                 None => None,
-                Some(lod) => lod.aggregate_updated_regions(),
+                Some(lod) => lod.aggregate_updates(),
             })
-            .collect();
-
-        renderer_voxel_data.set_updated_regions(updated_regions);
+            .collect()
     }
 }
 impl PhysicalMemoryGrid for VoxelMemoryGrid {
-    fn shift_offsets(&mut self, shift: Vector3<i64>) {
+    fn shift_offsets(&mut self, shift: TLCVector<i64>, new_cam_pos: VoxelPos<f32>) {
         for lod in self.lods.iter_mut().flatten() {
-            lod.shift_offsets(shift);
+            lod.shift_offsets(shift, new_cam_pos);
         }
     }
 

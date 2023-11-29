@@ -25,11 +25,6 @@ pub struct DataComponent<B: BufferScheme> {
     pub binding: u32,
 }
 
-impl<B: BufferScheme> DataComponent<B> {
-    pub fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
-        self.buffer_scheme.bind(descriptor_writes, self.binding);
-    }
-}
 impl<D: BufferContents> DataComponent<DualBuffer<D>> {
     fn record_transfer<L, A: CommandBufferAllocator>(
         &self,

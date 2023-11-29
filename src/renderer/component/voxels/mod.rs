@@ -1,8 +1,9 @@
-use crate::renderer::buffers::{BufferScheme, ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::buffers::{DynamicBufferScheme};
 use crate::renderer::component::voxels::lod::{RendererVoxelLOD, VoxelLODUpdate};
 use crate::renderer::component::{DataComponent, DataComponentSet};
 use itertools::Itertools;
 use vulkano::buffer::BufferContents;
+use crate::renderer::buffers::dual::ConstantDeviceLocalBuffer;
 
 pub mod data;
 pub mod lod;
@@ -32,11 +33,11 @@ impl VoxelData {
 }
 
 impl DataComponentSet for VoxelData {
-    fn list_dynamic_components(&self) -> Vec<&DataComponent<DualBuffer<dyn BufferContents>>> {
+    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
         self.lods.iter().flatten().filter_map_ok(|o| o?).collect()
     }
 
-    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
+    fn constant_components_mut(&mut self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
         vec![]
     }
 }

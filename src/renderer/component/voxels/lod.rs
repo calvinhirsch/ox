@@ -1,10 +1,11 @@
 use super::data::{VoxelBitmask, VoxelTypeIDs};
-use crate::renderer::buffers::{ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::buffers::{DynamicBufferScheme};
 use crate::renderer::component::{DataComponent, DataComponentSet};
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
 use vulkano::command_buffer::BufferCopy;
 use vulkano::memory::allocator::MemoryAllocator;
+use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
 
 pub struct VoxelLODUpdate<'a> {
     pub bitmask: &'a Vec<VoxelBitmask>,
@@ -52,14 +53,14 @@ impl RendererVoxelLOD {
 }
 
 impl DataComponentSet for RendererVoxelLOD {
-    fn list_dynamic_components(&self) -> Vec<&DataComponent<DualBuffer<dyn BufferContents>>> {
-        match &self.voxel_type_id_buffers {
-            None => vec![&self.bitmask_buffers],
-            Some(comp) => vec![&self.bitmask_buffers, comp],
+    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
+        match &mut self.voxel_type_id_buffers {
+            None => vec![&mut self.bitmask_buffers],
+            Some(comp) => vec![&mut self.bitmask_buffers, comp],
         }
     }
 
-    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
+    fn constant_components_mut(&self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
         vec![]
     }
 }

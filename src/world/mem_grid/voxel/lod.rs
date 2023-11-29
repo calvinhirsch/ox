@@ -1,16 +1,17 @@
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use crate::renderer::component::voxels::lod::RendererVoxelLOD;
-use crate::renderer::component::voxels::lod::VoxelLODUpdateRegions;
-use crate::world::mem_grid::layer::{LayerChunkData, MemoryGridLayer, MemoryGridLayerMetadata};
+use crate::renderer::component::voxels::lod::VoxelLODUpdate;
+use crate::world::mem_grid::layer::{MemoryGridLayerChunkData, MemoryGridLayerMetadata, PhysicalMemoryGridLayer, VirtualMemoryGridLayer};
 use crate::world::mem_grid::utils::cubed;
 use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxelIDs};
-use crate::world::mem_grid::{AsVirtualMemoryGrid, PhysicalMemoryGrid, VirtualMemoryGrid};
-use crate::world::TLCPos;
-use cgmath::Vector3;
-use derive_new::new;
+use crate::world::mem_grid::{FromVirtual, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::{TLCPos, TLCVector};
 use std::sync::Arc;
+use derive_more::Deref;
+use itertools::Itertools;
 use vulkano::command_buffer::BufferCopy;
 use vulkano::memory::allocator::MemoryAllocator;
+use winit::platform::x11::XVisualID;
 
 pub struct VoxelLODCreateParams {
     pub size: usize,
@@ -18,12 +19,15 @@ pub struct VoxelLODCreateParams {
     pub voxel_type_ids_binding: Option<u32>,
 }
 
-#[derive(new)]
-pub struct VoxelLOD {
-    metadata: VoxelLODMetadata,
-    bitmask_layer: MemoryGridLayer<VoxelBitmask, ()>,
-    voxel_type_id_layer: Option<MemoryGridLayer<VoxelTypeIDs, ()>>,
-    updated_bitmask_regions_layer: MemoryGridLayer<Vec<BufferCopy>, ()>,
+#[derive(Deref)]
+pub struct VoxelLOD(PhysicalMemoryGridStruct<VoxelLODData, VoxelLODMetadata>);
+#[derive(Deref)]
+pub struct VirtualVoxelLOD(VirtualMemoryGridStruct<VoxelLODChunkData, VirtualVoxelLODMetadata>);
+
+pub struct VoxelLODData {
+    bitmask_layer: PhysicalMemoryGridLayer<Vec<VoxelBitmask>, ()>,
+    voxel_type_id_layer: Option<PhysicalMemoryGridLayer<Vec<VoxelTypeIDs>, ()>>,
+    updated_bitmask_regions_layer: PhysicalMemoryGridLayer<Vec<BufferCopy>, ()>,
 }
 
 pub struct VoxelLODMetadata {
@@ -31,30 +35,26 @@ pub struct VoxelLODMetadata {
     voxels_per_tlc: usize,
 }
 
-struct ChunkBitmaskData<'a> {
-    bitmask: ChunkBitmask<'a>,
-    loaded: bool,
-}
-struct ChunkVoxelIDData<'a> {
-    voxel_ids: ChunkVoxelIDs<'a>,
-    loaded: bool,
+pub struct VirtualVoxelLODMetadata {
+    this: VoxelLODMetadata,
+    bitmask: MemoryGridLayerMetadata<()>,
+    voxel_type_ids: Option<MemoryGridLayerMetadata<()>>,
+    updated_regions: MemoryGridLayerMetadata<()>,
 }
 
-pub struct VoxelLODChunkData<'a> {
-    bitmask: ChunkBitmaskData<'a>,
-    voxel_type_ids: Option<ChunkVoxelIDData<'a>>,
-    updated_bitmask_regions: &'a mut Vec<BufferCopy>,
+pub struct VoxelLODChunkData {
+    bitmask: MemoryGridLayerChunkData<ChunkBitmask>,
+    voxel_type_ids: Option<MemoryGridLayerChunkData<ChunkVoxelIDs>>,
+    updated_bitmask_regions: MemoryGridLayerChunkData<Vec<BufferCopy>>,
 }
 
-pub struct VirtualizedVoxelLOD<'a> {
-    chunks: Vec<Option<VoxelLODChunkData<'a>>>,
-}
 
 impl VoxelLOD {
     pub fn new(
         params: VoxelLODCreateParams,
         voxels_per_tlc: usize,
         start_tlc: TLCPos<i64>,
+        tlc_size: usize,
         buffer_allocator: Arc<dyn MemoryAllocator>,
     ) -> (Self, RendererVoxelLOD) {
         let bitmask = VoxelBitmask::new_vec(voxels_per_tlc * cubed(params.size));
@@ -73,28 +73,35 @@ impl VoxelLOD {
             buffer_allocator,
         );
 
+        let common_layer_meta = MemoryGridLayerMetadata::new(start_tlc, params.size, tlc_size, ());
+
         (
-            VoxelLOD {
-                metadata: VoxelLODMetadata {
-                    size: params.size,
-                    voxels_per_tlc,
-                },
-                bitmask_layer: MemoryGridLayer::new(
-                    MemoryGridLayerMetadata::new(start_tlc, params.size, ()),
-                    bitmask,
-                ),
-                voxel_type_id_layer: match voxel_ids {
-                    None => None,
-                    Some(vids) => Some(MemoryGridLayer::new(
-                        MemoryGridLayerMetadata::new(start_tlc, params.size, ()),
-                        vids,
-                    )),
-                },
-                updated_bitmask_regions_layer: MemoryGridLayer::new(
-                    MemoryGridLayerMetadata::new(start_tlc, params.size, ()),
-                    vec![vec![]; cubed(params.size)],
-                ),
-            },
+            VoxelLOD(
+                PhysicalMemoryGridStruct::new(
+                    VoxelLODData {
+                        bitmask_layer: PhysicalMemoryGridLayer::new(
+                            common_layer_meta.clone(),
+                            bitmask,
+                        ),
+                        voxel_type_id_layer: match voxel_ids {
+                            None => None,
+                            Some(vids) => Some(PhysicalMemoryGridLayer::new(
+                                common_layer_meta.clone(),
+                                vids,
+                            )),
+                        },
+                        updated_bitmask_regions_layer: PhysicalMemoryGridLayer::new(
+                            common_layer_meta,
+                            vec![],
+                        )
+                    },
+                    VoxelLODMetadata {
+                        size: params.size,
+                        voxels_per_tlc,
+                    }
+                )
+
+            ),
             lod,
         )
     }
@@ -102,116 +109,169 @@ impl VoxelLOD {
     /// Aggregate the values from updated_bitmask_regions_layer into absolute regions in the
     /// bitmask buffer, generate regions for updating the voxel type ID buffer, and reset these
     /// tracked regions if clear_regions=true.
-    pub fn aggregate_updated_regions(&mut self, clear_regions: bool) -> VoxelLODUpdateRegions {
-        let mut bitmask_updated_regions = vec![];
-        let mut voxel_id_updated_regions = match self.voxel_type_id_layer {
-            None => None,
-            Some(_) => vec![],
-        };
+    pub fn aggregate_updates(&mut self, clear_regions: bool) -> Vec<VoxelLODUpdate> {
+        let mut updates = vec![];
 
-        for (i, regions) in self
+        for (chunk_i, regions) in self.data
             .updated_bitmask_regions_layer
             .borrow_mem_mut()
             .iter_mut()
             .enumerate()
         {
-            let bm_offset = i * self.metadata.voxels_per_tlc / VoxelBitmask::BITS_PER_VOXEL;
-            for region in regions {
-                bitmask_updated_regions.push(BufferCopy {
-                    src_offset: region.src_offset + bm_offset,
-                    dst_offset: region.dst_offset + bm_offset,
-                    size: region.size,
-                    ..Default::default()
-                })
-            }
 
-            match &mut voxel_id_updated_regions {
-                None => {}
-                Some(vi_regions) => {
-                    let scale = VoxelTypeIDs::BITS_PER_VOXEL / VoxelBitmask::BITS_PER_VOXEL;
-                    for region in regions {
-                        vi_regions.push(BufferCopy {
-                            src_offset: (region.src_offset + bm_offset) * scale,
-                            dst_offset: (region.dst_offset + bm_offset) * scale,
-                            size: region.size * scale,
-                            ..Default::default()
-                        })
+            let mut bitmask_updated_regions = vec![];
+            let mut voxel_id_updated_regions = match self.data.voxel_type_id_layer {
+                None => None,
+                Some(_) => vec![],
+            };
+
+            for chunk_regions in regions.iter_mut() {
+                let bm_offset = chunk_i * self.metadata.voxels_per_tlc / VoxelBitmask::BITS_PER_VOXEL;
+                for region in chunk_regions {
+                    bitmask_updated_regions.push(BufferCopy {
+                        src_offset: region.src_offset,
+                        dst_offset: region.dst_offset + bm_offset,
+                        size: region.size,
+                        ..Default::default()
+                    })
+                }
+
+                match &mut voxel_id_updated_regions {
+                    None => {}
+                    Some(vi_regions) => {
+                        let scale = VoxelTypeIDs::BITS_PER_VOXEL / VoxelBitmask::BITS_PER_VOXEL;
+                        for region in chunk_regions {
+                            vi_regions.push(BufferCopy {
+                                src_offset: (region.src_offset) * scale,
+                                dst_offset: (region.dst_offset + bm_offset) * scale,
+                                size: region.size * scale,
+                                ..Default::default()
+                            })
+                        }
                     }
+                }
+
+                if clear_regions {
+                    chunk_regions.clear();
                 }
             }
 
-            if clear_regions {
-                regions.clear();
-            }
+            updates.push(
+                VoxelLODUpdate {
+                    bitmask: &self.data.bitmask_layer.borrow_mem()[chunk_i],
+                    voxel_type_ids: self.data.voxel_type_id_layer.and_then(|layer| Some(&layer.borrow_mem()[chunk_i])),
+                    bitmask_updated_regions,
+                    voxel_id_updated_regions,
+                }
+            )
         }
 
-        VoxelLODUpdateRegions {
-            bitmask_updated_regions,
-            voxel_id_updated_regions,
-        }
-    }
-}
-impl<'a> PhysicalMemoryGrid for VoxelLOD {
-    fn shift_offsets(&mut self, shift: Vector3<i64>) {
-        self.bitmask_layer.shift_offsets(shift);
-        self.voxel_type_id_layer.shift_offsets(shift);
-    }
-
-    fn size(&self) -> usize {
-        self.metadata.size
+        updates
     }
 }
 
-impl<'a> AsVirtualMemoryGrid<VoxelLODChunkData<'a>> for VoxelLOD {
-    fn as_virtual(&mut self) -> Self::Virtual {
-        self.as_virtual_for_size(self.metadata.size)
+impl PhysicalMemoryGrid<Vec<VoxelBitmask>, VoxelLODMetadata> for VoxelLOD {
+    type ChunkLoadQueue = ();
+
+    fn shift(&mut self, shift: TLCVector<i32>, load: TLCVector<i32>) -> Self::ChunkLoadQueue {
+        self.data.bitmask_layer.shift_offsets(shift, load);
+        self.data.voxel_type_id_layer.shift_offsets(shift, load);
     }
+}
 
-    fn as_virtual_for_size(&mut self, grid_size: usize) -> VirtualizedVoxelLOD<'a> {
-        let bitmask_vgrid: VirtualMemoryGrid<VoxelLODChunkData<'a>> =
-            self.bitmask_layer.as_virtual_for_size(grid_size);
-        let chunk_bitmasks = bitmask_vgrid.deconstruct();
 
-        let voxel_id_vgrid: VirtualMemoryGrid<VoxelLODChunkData<'a>> =
-            self.voxel_type_id_layer.as_virtual_for_size(grid_size);
-        let chunk_voxel_ids = voxel_id_vgrid.deconstruct();
+impl ToVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
+    fn to_virtual_for_size(self, grid_size: usize) -> VirtualVoxelLOD {
+        let (data, metadata) = self.deconstruct();
 
-        let chunk_update_regions = self
-            .updated_bitmask_regions_layer
-            .as_virtual_for_size(grid_size)
+        let (bitmask_chunks, bitmask_meta) = data.bitmask_layer
+            .to_virtual_for_size(grid_size)
             .deconstruct();
 
-        VirtualizedVoxelLOD {
-            chunks: chunk_bitmasks
-                .into_iter()
-                .zip(chunk_voxel_ids.into_iter())
-                .zip(chunk_update_regions.into_iter())
-                .map(
-                    |((bitmask, voxel_type_ids), updated_bitmask_regions)| VoxelLODChunkData {
-                        bitmask: bitmask.unwrap(),
-                        voxel_type_ids,
-                        updated_bitmask_regions: updated_bitmask_regions.unwrap(),
+        let (voxel_id_chunks, voxel_id_meta) = match data.voxel_type_id_layer {
+            None => (None, None),
+            Some(voxel_id_layer) => voxel_id_layer
+                .to_virtual_for_size(grid_size)
+                .deconstruct(),
+        };
+
+        let (chunk_regions, regions_meta) = data.updated_bitmask_regions_layer
+            .to_virtual_for_size(grid_size)
+            .deconstruct();
+
+        VirtualVoxelLOD(
+            VirtualMemoryGridStruct::new(
+                bitmask_chunks
+                    .into_iter()
+                    .zip(voxel_id_chunks.into_iter())
+                    .zip(chunk_regions.into_iter())
+                    .map(
+                        |(
+                             (
+                                 bitmask,
+                                 voxel_type_ids),
+                             updated_bitmask_regions
+                         ) | VoxelLODChunkData {
+                            bitmask: bitmask.unwrap(),
+                            voxel_type_ids,
+                            updated_bitmask_regions: updated_bitmask_regions.unwrap(),
+                        },
+                    )
+                    .collect(),
+                VirtualVoxelLODMetadata {
+                    this: self.0.metadata,
+                    bitmask: bitmask_meta,
+                    voxel_type_ids: voxel_id_meta.unwrap_or(None),
+                    updated_regions: regions_meta,
+                }
+            )
+        )
+    }
+}
+
+
+impl FromVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
+    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelLODChunkData, VirtualVoxelLODMetadata>, grid_size: usize) -> Self {
+        let (data, metadata) = virtual_grid.deconstruct();
+        let (bitmask_grid, voxel_id_grid, update_grid) = data.into_iter().map(
+            |chunk_o| match chunk_o {
+                None => (None, None, None),
+                Some(chunk) => (chunk.bitmask, chunk.voxel_type_ids, chunk.updated_bitmask_regions),
+            }
+        ).collect();
+
+        VoxelLOD(
+            PhysicalMemoryGridStruct {
+                data: VoxelLODData {
+                    bitmask_layer: PhysicalMemoryGridLayer::from_virtual_for_size(
+                        VirtualMemoryGridStruct::new(
+                            bitmask_grid,
+                            metadata.bitmask,
+                        ),
+                        grid_size,
+                    ),
+                    voxel_type_id_layer: match metadata.voxel_type_ids {
+                        None => None,
+                        Some(m) => {
+                            PhysicalMemoryGridLayer::from_virtual_for_size(
+                                VirtualMemoryGridStruct::new(
+                                    voxel_id_grid,
+                                    m,
+                                ),
+                                grid_size,
+                            )
+                        }
                     },
-                )
-                .collect(),
-        }
-    }
-}
-
-impl<'a> LayerChunkData<VoxelBitmask> for ChunkBitmaskData<'a> {
-    fn new(slice: &mut [VoxelBitmask], loaded: bool) -> Self {
-        ChunkBitmaskData {
-            bitmask: ChunkBitmask::from(slice),
-            loaded,
-        }
-    }
-}
-
-impl<'a> LayerChunkData<VoxelTypeIDs> for ChunkVoxelIDData<'a> {
-    fn new(slice: &mut [VoxelTypeIDs], loaded: bool) -> Self {
-        ChunkVoxelIDData {
-            voxel_ids: ChunkVoxelIDs::from(slice),
-            loaded,
-        }
+                    updated_bitmask_regions_layer: PhysicalMemoryGridLayer::from_virtual_for_size(
+                        VirtualMemoryGridStruct::new(
+                            update_grid,
+                            metadata.updated_regions,
+                        ),
+                        grid_size,
+                    ),
+                },
+                metadata: virtual_grid.metadata.this,
+            }
+        )
     }
 }

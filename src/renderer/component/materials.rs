@@ -3,7 +3,7 @@ use vulkano::buffer::BufferContents;
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::{ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
 use crate::renderer::component::DataComponent;
 
 

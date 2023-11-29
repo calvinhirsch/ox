@@ -18,6 +18,7 @@ enum-iterator = "1.4.1"
 derive-new = "0.6.0"
 paste = "1.0.14"
 smallvec = "1.11.2"
+derive_more = "0.99.17"
 
 [profile.dev]
 opt-level = 1

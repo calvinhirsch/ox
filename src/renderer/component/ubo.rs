@@ -1,8 +1,9 @@
-use crate::renderer::buffers::{ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::buffers::{ConstantDeviceLocalBuffer, DualBuffer, DynamicBufferScheme};
 use crate::renderer::component::{DataComponent, DataComponentSet};
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
 use vulkano::memory::allocator::MemoryAllocator;
+use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
 
 #[derive(BufferContents, Debug, Clone)]
 #[repr(C)]
@@ -27,11 +28,11 @@ impl RendererUBO {
 }
 
 impl DataComponentSet for RendererUBO {
-    fn list_dynamic_components(&self) -> Vec<&DataComponent<DualBuffer<dyn BufferContents>>> {
-        vec![&self.comp]
+    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
+        vec![&mut self.comp]
     }
 
-    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
+    fn constant_components_mut(&self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
         vec![]
     }
 }

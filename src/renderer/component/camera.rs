@@ -1,19 +1,20 @@
-use crate::renderer::buffers::{BufferScheme, ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::buffers::{DynamicBufferScheme};
 use crate::renderer::component::{DataComponent, DataComponentSet};
 use crate::world::camera::Camera;
-use cgmath::{Angle, Array, Point3, Vector3};
+use cgmath::{Angle, Array, Point3, Rad, Vector3};
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
 use vulkano::memory::allocator::MemoryAllocator;
+use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer, DualBufferWithFullCopy};
 
 pub struct RendererCamera {
-    comp: DataComponent<DualBuffer<CameraUBO>>,
+    comp: DataComponent<DualBufferWithFullCopy<CameraUBO>>,
 }
 impl RendererCamera {
     pub fn new(binding: u32, allocator: Arc<dyn MemoryAllocator>) -> Self {
         RendererCamera {
             comp: DataComponent {
-                buffer_scheme: DualBuffer::from_data(CameraUBO::new_blank(), allocator, true),
+                buffer_scheme: DualBuffer::from_data(CameraUBO::new_blank(), allocator, true).with_full_copy(),
                 binding,
             },
         }
@@ -25,11 +26,11 @@ impl RendererCamera {
     }
 }
 impl DataComponentSet for RendererCamera {
-    fn list_dynamic_components(&self) -> Vec<&DataComponent<DualBuffer<dyn BufferContents>>> {
-        vec![&self.comp]
+    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
+        vec![&mut self.comp]
     }
 
-    fn list_constant_components(&self) -> Vec<&DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
+    fn constant_components_mut(&self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
         vec![]
     }
 }
