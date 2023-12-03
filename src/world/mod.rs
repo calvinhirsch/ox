@@ -1,19 +1,17 @@
 use cgmath::{Array, Point3, Vector3};
-use num_traits::real::Real;
-use num_traits::{Pow, PrimInt, Zero};
-use std::any::Any;
+use std::marker::PhantomData;
 use std::time::Duration;
-use vulkano::buffer::{BufferContents, Subbuffer};
-use vulkano::command_buffer::BufferCopy;
+use num_traits::real::Real;
+use num_traits::Zero;
 
 pub mod mem_grid;
-use mem_grid::PhysicalMemoryGrid;
 
 pub mod camera;
-mod loader;
+pub mod loader;
 
 use camera::{Camera, controller::CameraController};
-use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::loader::{ChunkLoader, ChunkLoadQueueItem, LoadChunk};
+use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, ToVirtual, VirtualMemoryGridStruct};
 
 /// Position in units of top level chunks
 #[derive(Clone, Copy)]
@@ -35,16 +33,24 @@ pub struct VoxelVector<T>(pub Vector3<T>);
 pub struct WorldMetadata {
     tlc_size: usize,
     tlc_load_dist_thresh: u32,
-    tlc_unload_dist_thresh: u32,
     buffer_chunk_states: [BufferChunkState; 3],
 }
 
-pub struct World<MG> {
+pub struct World<MG, PMG, C, VMD>
+where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
+      C: LoadChunk<PMG::ChunkLoadQueueItemData>,
+      VMD: MemoryGridMetadata {
+    physical_type: PhantomData<PMG>,
+    chunk_data_type: PhantomData<C>,
+    virtual_grid_metadata: PhantomData<VMD>,
+
     pub mem_grid: MG,
+    chunk_loader: ChunkLoader<PMG::ChunkLoadQueueItemData, C>,
     camera: Camera,
     metadata: WorldMetadata,
 }
 
+#[derive(Copy, Clone, PartialEq)]
 pub enum BufferChunkState {
     Unloaded = 0,
     LoadedUpper = 1,
@@ -52,78 +58,146 @@ pub enum BufferChunkState {
 }
 
 
-impl<MG> World<MG> {
+impl<PMG, C, VMD> World<PMG, PMG, C, VMD>
+where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
+      C: LoadChunk<PMG::ChunkLoadQueueItemData>,
+      VMD: MemoryGridMetadata{
     pub fn new(
-        mem_grid: MG,
+        mem_grid: PMG,
+        chunk_loader: ChunkLoader<PMG::ChunkLoadQueueItemData, C>,
         camera: Camera,
         tlc_size: usize,
         tlc_load_dist_thresh: u32,
-        tlc_unload_dist_thresh: u32,
-    ) -> World<MG> {
+    ) -> World<PMG, PMG, C, VMD> {
         World {
+            physical_type: PhantomData::default(),
+            chunk_data_type: PhantomData::default(),
+            virtual_grid_metadata: PhantomData::default(),
             mem_grid,
+            chunk_loader,
             camera,
             metadata: WorldMetadata {
                 tlc_size,
                 tlc_load_dist_thresh,
-                tlc_unload_dist_thresh,
                 buffer_chunk_states: [BufferChunkState::Unloaded; 3]
             },
         }
     }
-}
 
-impl<C, MD: MemoryGridMetadata, MG: PhysicalMemoryGrid<C, MD>> World<MG> {
-    pub fn queue_load_all(&mut self) -> MG::ChunkLoadQueue {
+    pub fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<PMG::ChunkLoadQueueItemData>> {
         self.mem_grid.queue_load_all()
     }
 
-    pub fn move_camera(&mut self, camera_controller: &mut impl CameraController, dt: Duration) -> MG::ChunkLoadQueue {
-        camera_controller.apply(&mut self.camera, dt);
+    pub fn move_camera(
+        &mut self,
+        camera_controller: &mut impl CameraController,
+        dt: Duration
+    ) -> Vec<ChunkLoadQueueItem<PMG::ChunkLoadQueueItemData>> {
+        fn pt_gr(pt: Point3<f32>, val: f32) -> bool {
+            pt.x > val && pt.y > val && pt.z > val
+        }
+        fn pt_lt(pt: Point3<f32>, val: f32) -> bool {
+            pt.x < val && pt.y < val && pt.z < val
+        }
 
-        let move_vector = (self.camera.position / (self.metadata.tlc_size as f32))
+        let last_pos = self.camera.pos().0;
+        camera_controller.apply(&mut self.camera, dt);
+        let cam_delta = self.camera.pos().0 - last_pos;
+
+        let move_vector = (self.camera.position.0 / (self.metadata.tlc_size as f32))
             .map(|a| a.floor() as i64)
             - Point3::<i64>::from_value(((self.mem_grid.size() - 1) / 2) as i64);
 
         if !move_vector.is_zero() {
-            self.camera.position -= (move_vector * self.metadata.tlc_size as i64)
-                .cast::<f32>()
-                .unwrap();
+            self.camera.position = VoxelPos(
+                self.camera.position.0 - (move_vector * self.metadata.tlc_size as i64)
+                    .cast::<f32>()
+                    .unwrap()
+            );
         }
 
-        for c in vec![0, 1, 2] {
-            if move_vector[c] != 0 {
-                if move_vector[c].abs() > 1 {
-                    self.metadata.buffer_chunk_states[c] = BufferChunkState::Unloaded;
-                } else {
-                    if shift[c] == -1 && self.metadata.tlc_size - center_chunk_cam_pos[c] > self.metadata.
+        let center_chunk_cam_pos = self.camera.position.0 - Vector3::from_value(
+            self.metadata.tlc_size as f32 * (self.mem_grid.size() - 1) as f32 / 2.
+        );
+
+        // For each axis, set self.metadata.buffer_chunk_states, load_buffer, and load_in_from_edge
+        let mut load_buffer: [bool; 3] = [false; 3];
+        let mut load_in_from_edge = TLCVector(Vector3 { x: 0, y: 0, z: 0 });
+        for a in vec![0, 1, 2] {
+            let within_upper_load_thresh = pt_gr(
+                center_chunk_cam_pos - Vector3::from_value(self.metadata.tlc_size as f32),
+                self.metadata.tlc_load_dist_thresh as f32
+            );
+            let within_lower_load_thresh = pt_lt(center_chunk_cam_pos, self.metadata.tlc_load_dist_thresh as f32);
+            let buffer_chunk_state = self.metadata.buffer_chunk_states[a];
+
+            if move_vector[a] == 0 {
+                if cam_delta[a] > 0. {
+                    load_buffer[a] = within_upper_load_thresh && buffer_chunk_state != BufferChunkState::LoadedUpper;
                 }
+                else {
+                    load_buffer[a] = within_lower_load_thresh && buffer_chunk_state != BufferChunkState::LoadedLower;
+                }
+            }
+            else {
+                // Load number of chunks in this direction equal to the number we traveled, minus
+                // one if we had already loaded one of them in this direction
+                let loaded_one_already = buffer_chunk_state == (
+                    if move_vector[a] > 0 { BufferChunkState::LoadedUpper }
+                    else { BufferChunkState::LoadedLower }
+                );
+                load_in_from_edge.0[a] = move_vector[a] - loaded_one_already as i64;
+
+                (self.metadata.buffer_chunk_states[a], load_buffer[a]) = {
+                    if move_vector[a] > 0 {
+                        if within_upper_load_thresh { (BufferChunkState::LoadedUpper, true) }
+                        else { (BufferChunkState::LoadedLower, false) }
+                    }
+                    else if within_lower_load_thresh { (BufferChunkState::LoadedLower, true) }
+                    else { (BufferChunkState::LoadedUpper, false) }
+                };
             }
         }
 
-        self.mem_grid.shift_offsets(TLCVector(move_vector), VoxelPos(self.camera.position))
+        self.mem_grid.shift(
+            TLCVector(move_vector.cast::<i32>().unwrap()),
+            TLCVector(load_in_from_edge.0.cast::<i32>().unwrap()),
+            load_buffer
+        )
+    }
+
+    pub fn unlock(self) -> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD> {
+        World {
+            physical_type: Default::default(),
+            chunk_data_type: Default::default(),
+            virtual_grid_metadata: Default::default(),
+            mem_grid: self.mem_grid.to_virtual(),
+
+            chunk_loader: self.chunk_loader,
+            camera: Default::default(),
+            metadata: self.metadata,
+        }
     }
 }
 
-impl<C, MD> World<VirtualMemoryGridStruct<C, MD>> {
+impl<C, VMD, PMG> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD>
+where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
+      C: LoadChunk<PMG::ChunkLoadQueueItemData>,
+      VMD: MemoryGridMetadata {
+    pub fn lock(self) -> World<PMG, PMG, C, VMD> {
+        World {
+            physical_type: Default::default(),
+            chunk_data_type: Default::default(),
+            virtual_grid_metadata: Default::default(),
+            mem_grid: PMG::from_virtual(self.mem_grid),
+
+            chunk_loader: self.chunk_loader,
+            camera: Default::default(),
+            metadata: self.metadata,
+        }
+    }
+
     pub fn chunks(&self) -> &Vec<Option<C>> { &self.mem_grid.chunks }
     pub fn chunks_mut(&mut self) -> &mut Vec<Option<C>> { &mut self.mem_grid.chunks }
 }
 
-impl<C, MD, MG: ToVirtual<C, MD>> World<MG> {
-    pub fn unlock(self) -> World<VirtualMemoryGridStruct<C, MD>> {
-        World {
-            mem_grid: self.mem_grid.to_virtual(),
-            ..self
-        }
-    }
-}
-
-impl<C, MD, MG: FromVirtual<C, MD>> World<VirtualMemoryGridStruct<C, MD>> {
-    pub fn lock(self) -> World<MG> {
-        World {
-            mem_grid: MG::from_virtual(self.mem_grid),
-            ..self
-        }
-    }
-}

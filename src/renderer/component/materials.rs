@@ -7,7 +7,7 @@ use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
 use crate::renderer::component::DataComponent;
 
 
-#[derive(BufferContents, Debug, Clone)]
+#[derive(BufferContents, Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Material {
     pub color: [f32; 3],
@@ -39,7 +39,7 @@ impl Default for Material {
 
 
 pub struct MaterialList {
-    comp: DataComponent<ConstantDeviceLocalBuffer<Material>>
+    comp: DataComponent<ConstantDeviceLocalBuffer<[Material]>>
 }
 
 
@@ -52,10 +52,8 @@ impl MaterialList {
     ) -> MaterialList {
         MaterialList {
             comp: DataComponent {
-                buffer_scheme: ConstantDeviceLocalBuffer::from_dual_buffer(
-                    one_time_transfer_builder,
-                    DualBuffer::from_iter(materials.iter().copied(), memory_allocator, false),
-                ),
+                buffer_scheme: DualBuffer::from_iter(materials.iter().copied(), memory_allocator, false)
+                    .without_staging_buffer(one_time_transfer_builder),
                 binding,
             }
         }

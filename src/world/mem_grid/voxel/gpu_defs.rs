@@ -1,5 +1,4 @@
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
-use num_traits::PrimInt;
 use std::ops::{Index, IndexMut};
 
 #[derive(Clone)]
@@ -8,6 +7,11 @@ pub struct ChunkVoxelIDs(Vec<VoxelTypeIDs>);
 impl From<Vec<VoxelTypeIDs>> for ChunkVoxelIDs {
     fn from(value: Vec<VoxelTypeIDs>) -> Self {
         ChunkVoxelIDs(value)
+    }
+}
+impl Into<Vec<VoxelTypeIDs>> for ChunkVoxelIDs {
+    fn into(self) -> Vec<VoxelTypeIDs> {
+        self.0
     }
 }
 impl<'a> Index<usize> for ChunkVoxelIDs {
@@ -28,6 +32,11 @@ pub struct ChunkBitmask(Vec<VoxelBitmask>);
 impl From<Vec<VoxelBitmask>> for ChunkBitmask {
     fn from(value: Vec<VoxelBitmask>) -> Self {
         ChunkBitmask(value)
+    }
+}
+impl Into<Vec<VoxelBitmask>> for ChunkBitmask {
+    fn into(self) -> Vec<VoxelBitmask> {
+        self.0
     }
 }
 impl ChunkBitmask {

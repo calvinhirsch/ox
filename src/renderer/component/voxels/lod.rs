@@ -1,11 +1,11 @@
 use super::data::{VoxelBitmask, VoxelTypeIDs};
-use crate::renderer::buffers::{DynamicBufferScheme};
 use crate::renderer::component::{DataComponent, DataComponentSet};
 use std::sync::Arc;
-use vulkano::buffer::BufferContents;
-use vulkano::command_buffer::BufferCopy;
+use vulkano::command_buffer::allocator::CommandBufferAllocator;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy};
+use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithDynamicCopyRegions};
 
 pub struct VoxelLODUpdate<'a> {
     pub bitmask: &'a Vec<VoxelBitmask>,
@@ -15,11 +15,11 @@ pub struct VoxelLODUpdate<'a> {
 }
 
 pub struct RendererVoxelLOD {
-    pub bitmask_buffers: DataComponent<DualBuffer<VoxelBitmask>>,
-    pub voxel_type_id_buffers: Option<DataComponent<DualBuffer<VoxelTypeIDs>>>,
+    pub bitmask_buffers: DataComponent<DualBufferWithDynamicCopyRegions<VoxelBitmask>>,
+    pub voxel_type_id_buffers: Option<DataComponent<DualBufferWithDynamicCopyRegions<VoxelTypeIDs>>>,
 }
 impl RendererVoxelLOD {
-    pub fn new<BMI: Iterator<Item = VoxelBitmask>, VII: Iterator<Item = VoxelTypeIDs>>(
+    pub fn new<BMI: ExactSizeIterator<Item = VoxelBitmask>, VII: ExactSizeIterator<Item = VoxelTypeIDs>>(
         bitmask_iter: BMI,
         voxel_id_iter: Option<VII>,
         bitmask_binding: u32,
@@ -28,13 +28,13 @@ impl RendererVoxelLOD {
     ) -> Self {
         RendererVoxelLOD {
             bitmask_buffers: DataComponent {
-                buffer_scheme: DualBuffer::new(bitmask_iter, Arc::clone(&memory_allocator)),
+                buffer_scheme: DualBuffer::from_iter(bitmask_iter, Arc::clone(&memory_allocator), false).with_copy_regions(),
                 binding: bitmask_binding,
             },
             voxel_type_id_buffers: match voxel_id_iter {
                 None => None,
                 Some(iter) => Some(DataComponent {
-                    buffer_scheme: DualBuffer::new(iter, memory_allocator),
+                    buffer_scheme: DualBuffer::from_iter(iter, memory_allocator, false).with_copy_regions(),
                     binding: voxel_id_binding.unwrap(),
                 }),
             },
@@ -45,22 +45,23 @@ impl RendererVoxelLOD {
         self.bitmask_buffers.buffer_scheme.update_staging_buffer(update.bitmask, update.bitmask_updated_regions);
         match &mut self.voxel_type_id_buffers {
             None => {},
-            Some(bs) => {
-                bs.update_staging_buffer(update.voxel_type_ids.unwrap(), update.voxel_id_updated_regions.unwrap());
+            Some(vids) => {
+                vids.buffer_scheme.update_staging_buffer(update.voxel_type_ids.unwrap(), update.voxel_id_updated_regions.unwrap());
             }
         };
     }
 }
 
 impl DataComponentSet for RendererVoxelLOD {
-    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
-        match &mut self.voxel_type_id_buffers {
-            None => vec![&mut self.bitmask_buffers],
-            Some(comp) => vec![&mut self.bitmask_buffers, comp],
-        }
+    fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
+        todo!()
     }
 
-    fn constant_components_mut(&self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
-        vec![]
+    fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+        todo!()
+    }
+
+    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+        todo!()
     }
 }

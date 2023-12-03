@@ -37,12 +37,12 @@ impl CameraController for WinitCameraController {
             * (self.amount_forward - self.amount_backward)
             * self.speed
             * dt;
-        camera.position +=
+        camera.position.0 +=
             right * (self.amount_right - self.amount_left) * self.speed * dt;
 
         // Move up/down. Since we don't use roll, we can just
         // modify the y coordinate directly.
-        camera.position.y += (self.amount_up - self.amount_down) * self.speed * dt;
+        camera.position.0.y += (self.amount_up - self.amount_down) * self.speed * dt;
 
         // Rotate
         camera.yaw += Rad(self.rotate_horizontal) * self.sensitivity * dt;

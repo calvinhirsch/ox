@@ -1,5 +1,4 @@
-use crate::renderer::buffers::BufferScheme;
-use crate::renderer::component::{DataComponent, DataComponentSet};
+use crate::renderer::component::{DataComponentSet};
 use crate::renderer::pipeline::ComputeRenderPipeline;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,13 +10,14 @@ use vulkano::image::{Image, ImageUsage};
 use vulkano::shader::ShaderModule;
 use vulkano::{swapchain, sync, Validated, VulkanError};
 use vulkano::swapchain::{Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo};
-use vulkano::sync::future::FenceSignalFuture;
+use vulkano::sync::future::{FenceSignalFuture};
 use vulkano::sync::GpuFuture;
 use winit::dpi::PhysicalSize;
 
 pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {
-    pub subgroup_width: usize,
-    pub subgroup_height: usize,
+    pub subgroup_width: u32,
+    pub subgroup_height: u32,
+    pub image_binding: u32,
     pub shader: Arc<ShaderModule>,
     pub descriptor_set_allocator: DSA,
     pub command_buffer_allocator: CBA,
@@ -28,23 +28,23 @@ pub struct SwapchainPipeline<DSA: DescriptorSetAllocator, CBA: CommandBufferAllo
     images: Vec<Arc<Image>>,
     graphics_queue: Arc<Queue>,
     swapchain: Arc<Swapchain>,
-    pipeline: ComputeRenderPipeline,
+    pipeline: ComputeRenderPipeline<CBA>,
 
     recreate: bool,
-    compute_fence: Option<Arc<FenceSignalFuture<dyn GpuFuture>>>,
-    present_fences: Vec<Option<Arc<FenceSignalFuture<dyn GpuFuture>>>>,
+    compute_fence: Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>,
+    present_fences: Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
     prev_fence_i: u32,
 }
 
 impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline<DSA, CBA> {
-    fn new_pipeline<D: DataComponentSet>(
+    fn new_pipeline(
         images: Vec<Arc<Image>>,
         device: Arc<Device>,
         queue: Arc<Queue>,
         dimensions: PhysicalSize<u32>,
-        components: Vec<&DataComponent<dyn BufferScheme>>,
+        component_set: &impl DataComponentSet,
         params: SwapchainPipelineParams<DSA, CBA>,
-    ) -> ComputeRenderPipeline {
+    ) -> ComputeRenderPipeline<CBA> {
         ComputeRenderPipeline::new(
             params.subgroup_width,
             params.subgroup_height,
@@ -52,19 +52,20 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             Arc::clone(&params.shader),
             queue,
             images.as_slice(),
-            params.descriptor_set_allocator,
-            params.command_buffer_allocator,
+            params.image_binding,
+            &params.descriptor_set_allocator,
+            &params.command_buffer_allocator,
             &dimensions,
-            components,
+            component_set,
         )
     }
 
-    pub fn new<D: DataComponentSet>(
+    pub fn new(
         device: Arc<Device>,
         compute_queue: Arc<Queue>,
         graphics_queue: Arc<Queue>,
         dimensions: PhysicalSize<u32>,
-        components: Vec<&DataComponent<dyn BufferScheme>>,
+        component_set: &impl DataComponentSet,
         physical_device: Arc<PhysicalDevice>,
         surface: Arc<Surface>,
         params: SwapchainPipelineParams<DSA, CBA>,
@@ -102,10 +103,11 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             Arc::clone(&params.shader),
             compute_queue,
             images.as_slice(),
+            params.image_binding,
             &params.descriptor_set_allocator,
             &params.command_buffer_allocator,
             &dimensions,
-            components,
+            component_set,
         );
 
         SwapchainPipeline {
@@ -121,10 +123,10 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
         }
     }
 
-    pub fn resize<D: DataComponentSet>(
+    pub fn resize(
         &mut self,
         dimensions: &PhysicalSize<u32>,
-        components: Vec<&DataComponent<dyn BufferScheme>>,
+        component_set: &impl DataComponentSet,
     ) {
         self.recreate_with_dims(dimensions);
         self.pipeline.recreate(
@@ -132,7 +134,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             &self.params.descriptor_set_allocator,
             &self.params.command_buffer_allocator,
             &dimensions,
-            components,
+            component_set,
         );
     }
 
@@ -154,7 +156,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
 
     pub fn wait_for_compute_done(&self, timeout: Option<Duration>) {
         if let Some(fence) = &self.compute_fence {
-            fence.wait(timeout)
+            fence.wait(timeout).unwrap();
         }
     }
 
@@ -202,7 +204,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             .join(acquire_future);
 
         let compute_future =
-            self.pipeline.execute(curr_future, image_i).then_signal_fence_and_flush();
+            Box::new(self.pipeline.execute(curr_future, image_i as usize)).then_signal_fence_and_flush();
 
         self.compute_fence = match compute_future {
             Ok(value) => Some(Arc::new(value)),
@@ -212,12 +214,13 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             }
         };
 
-        let future = Arc::clone(&self.compute_fence).unwrap()
-            .then_swapchain_present(
-                Arc::clone(&self.graphics_queue),
-                SwapchainPresentInfo::swapchain_image_index(Arc::clone(&self.swapchain), image_i),
-            )
-            .then_signal_fence_and_flush();
+        let future = Box::new(
+            Arc::clone(&self.compute_fence.unwrap())
+                .then_swapchain_present(
+                    Arc::clone(&self.graphics_queue),
+                    SwapchainPresentInfo::swapchain_image_index(Arc::clone(&self.swapchain), image_i),
+                )
+        ).then_signal_fence_and_flush();
 
         self.present_fences[image_i as usize] = match future {
             Ok(value) => Some(Arc::new(value)),

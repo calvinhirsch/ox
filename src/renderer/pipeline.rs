@@ -1,9 +1,8 @@
-use crate::renderer::buffers::BufferScheme;
-use crate::renderer::component::DataComponent;
+use crate::renderer::component::{DataComponentSet};
 use std::sync::Arc;
-use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommandBufferAllocator};
+use vulkano::command_buffer::allocator::{CommandBufferAllocator};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::allocator::{DescriptorSetAllocator, StandardDescriptorSetAllocator};
+use vulkano::descriptor_set::allocator::{DescriptorSetAllocator};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
@@ -17,28 +16,30 @@ use vulkano::shader::ShaderModule;
 use vulkano::sync::GpuFuture;
 use winit::dpi::PhysicalSize;
 
-pub struct ComputeRenderPipeline {
-    subgroup_width: usize,
-    subgroup_height: usize,
+pub struct ComputeRenderPipeline<CBA: CommandBufferAllocator> {
+    subgroup_width: u32,
+    subgroup_height: u32,
+    image_binding: u32,
     device: Arc<Device>,
     shader: Arc<ShaderModule>,
     queue: Arc<Queue>,
-    command_buffers: Vec<Arc<PrimaryAutoCommandBuffer>>,
+    command_buffers: Vec<Arc<PrimaryAutoCommandBuffer<CBA>>>,
 }
 
-impl ComputeRenderPipeline {
-    pub fn create_command_buffers<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator>(
-        subgroup_width: usize,
-        subgroup_height: usize,
+impl<CBA: CommandBufferAllocator> ComputeRenderPipeline<CBA> {
+    pub fn create_command_buffers<DSA: DescriptorSetAllocator>(
+        subgroup_width: u32,
+        subgroup_height: u32,
         device: Arc<Device>,
         shader: Arc<ShaderModule>,
         queue: Arc<Queue>,
         images: &[Arc<Image>],
+        image_binding: u32,
         descriptor_set_allocator: &DSA,
         command_buffer_allocator: &CBA,
         dimensions: &PhysicalSize<u32>,
-        components: Vec<&DataComponent<dyn BufferScheme>>,
-    ) -> Vec<Arc<PrimaryAutoCommandBuffer>> {
+        component_set: &impl DataComponentSet,
+    ) -> Vec<Arc<PrimaryAutoCommandBuffer<CBA>>> {
         let stage = PipelineShaderStageCreateInfo::new(shader.single_entry_point().unwrap());
         let pipeline = ComputePipeline::new(
             Arc::clone(&device),
@@ -56,16 +57,15 @@ impl ComputeRenderPipeline {
         )
         .unwrap();
 
-        let compute_descriptor_sets: Vec<Arc<PersistentDescriptorSet>> = images
+        let compute_descriptor_sets: Vec<Arc<PersistentDescriptorSet<DSA::Alloc>>> = images
             .iter()
             .map(|image| {
                 let mut descriptor_writes = vec![WriteDescriptorSet::image_view(
-                    0,
+                    image_binding,
                     ImageView::new(image.clone(), ImageViewCreateInfo::from_image(image)).unwrap(),
                 )];
-                for component in components {
-                    component.bind(&mut descriptor_writes);
-                }
+
+                component_set.bind(&mut descriptor_writes);
 
                 PersistentDescriptorSet::new(
                     descriptor_set_allocator,
@@ -109,21 +109,23 @@ impl ComputeRenderPipeline {
             .collect()
     }
 
-    pub fn new(
-        subgroup_width: usize,
-        subgroup_height: usize,
+    pub fn new<DSA: DescriptorSetAllocator>(
+        subgroup_width: u32,
+        subgroup_height: u32,
         device: Arc<Device>,
         shader: Arc<ShaderModule>,
         queue: Arc<Queue>,
         images: &[Arc<Image>],
-        descriptor_set_allocator: &StandardDescriptorSetAllocator,
-        command_buffer_allocator: &StandardCommandBufferAllocator,
+        image_binding: u32,
+        descriptor_set_allocator: &DSA,
+        command_buffer_allocator: &CBA,
         dimensions: &PhysicalSize<u32>,
-        components: Vec<&DataComponent<dyn BufferScheme>>,
+        component_set: &impl DataComponentSet,
     ) -> Self {
         ComputeRenderPipeline {
             subgroup_width,
             subgroup_height,
+            image_binding,
             device: Arc::clone(&device),
             shader: Arc::clone(&shader),
             queue: Arc::clone(&queue),
@@ -134,21 +136,22 @@ impl ComputeRenderPipeline {
                 shader,
                 queue,
                 images,
+                image_binding,
                 descriptor_set_allocator,
                 command_buffer_allocator,
                 dimensions,
-                components,
+                component_set,
             ),
         }
     }
 
-    pub fn recreate(
+    pub fn recreate<DSA: DescriptorSetAllocator>(
         &mut self,
         images: &[Arc<Image>],
-        descriptor_set_allocator: &StandardDescriptorSetAllocator,
-        command_buffer_allocator: &StandardCommandBufferAllocator,
+        descriptor_set_allocator: &DSA,
+        command_buffer_allocator: &CBA,
         dimensions: &PhysicalSize<u32>,
-        components: Vec<&DataComponent<dyn BufferScheme>>,
+        component_set: &impl DataComponentSet,
     ) {
         self.command_buffers = Self::create_command_buffers(
             self.subgroup_width,
@@ -157,14 +160,15 @@ impl ComputeRenderPipeline {
             Arc::clone(&self.shader),
             Arc::clone(&self.queue),
             images,
+            self.image_binding,
             descriptor_set_allocator,
             command_buffer_allocator,
             dimensions,
-            components,
+            component_set,
         );
     }
 
-    pub fn execute<F: GpuFuture>(&self, future: F, index: u32) -> CommandBufferExecFuture<F> {
-        future.then_execute(Arc::clone(&self.queue), self.command_buffers[index]).unwrap()
+    pub fn execute<F: GpuFuture>(&self, future: F, index: usize) -> CommandBufferExecFuture<F> {
+        future.then_execute(Arc::clone(&self.queue), Arc::clone(&self.command_buffers[index])).unwrap()
     }
 }

@@ -1,11 +1,12 @@
-use cgmath::{Angle, InnerSpace, Point3, Rad};
+use cgmath::{Point3, Rad};
+use crate::world::VoxelPos;
 
 pub mod controller;
 
 
 #[derive(Debug)]
 pub struct Camera {
-    pub position: Point3<f32>,
+    pub position: VoxelPos<f32>,
     pub yaw: Rad<f32>,   // radians
     pub pitch: Rad<f32>, // radians
     pub viewport_dist: f32,
@@ -16,11 +17,11 @@ pub struct Camera {
 impl Default for Camera {
     fn default() -> Self {
         Camera {
-            position: Point3 {
+            position: VoxelPos(Point3 {
                 x: 0.,
                 y: 0.,
                 z: 0.,
-            },
+            }),
             yaw: 0.into(),
             pitch: 0.into(),
             viewport_dist: 0.1,
@@ -30,3 +31,8 @@ impl Default for Camera {
     }
 }
 
+impl Camera {
+    pub fn pos(&self) -> &VoxelPos<f32> {
+        &self.position
+    }
+}

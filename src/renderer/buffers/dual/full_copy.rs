@@ -1,29 +1,27 @@
 use derive_new::new;
-use vulkano::buffer::{BufferContents, Subbuffer};
+use vulkano::buffer::{BufferContents, BufferWriteGuard, Subbuffer};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CopyBufferInfo};
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::descriptor_set::WriteDescriptorSet;
-use crate::renderer::buffers::{BufferScheme, DynamicBufferScheme};
+use crate::renderer::buffers::{BufferScheme};
 
 
 /// Dual buffer scheme where the whole staging buffer is copied to the device local buffer every frame
 #[derive(new)]
-pub struct DualBufferWithFullCopy<T: BufferContents> {
+pub struct DualBufferWithFullCopy<T: ?Sized> {
     staging: Subbuffer<T>,
     device_local: Subbuffer<T>,
 }
 
 
-impl<T: BufferContents> BufferScheme for DualBufferWithFullCopy<T> {
+impl<T: ?Sized> BufferScheme for DualBufferWithFullCopy<T> {
     fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>, binding: u32) {
         descriptor_writes.push(WriteDescriptorSet::buffer(
             binding,
             self.device_local.clone(),
         ))
     }
-}
 
-impl<T: BufferContents> DynamicBufferScheme for DualBufferWithFullCopy<T> {
     fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
         builder
             .copy_buffer(CopyBufferInfo::buffers(
@@ -33,12 +31,18 @@ impl<T: BufferContents> DynamicBufferScheme for DualBufferWithFullCopy<T> {
             .unwrap();
     }
 
-    fn record_transfer_jit<L, A: CommandBufferAllocator>(&self, _: &mut AutoCommandBufferBuilder<L, A>) {}
+    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, _: &mut AutoCommandBufferBuilder<L, A>) { }
 }
 
+
 impl<T: BufferContents> DualBufferWithFullCopy<T> {
-    pub fn update_staging_buffer(&mut self, src: &[T]) {
-        let mut bitmask_write = self.staging.write().unwrap();
-        bitmask_write.copy_from_slice(src);
+    pub fn write_staging(&mut self) -> BufferWriteGuard<'_, T> {
+        self.staging.write().unwrap()
+    }
+}
+
+impl<T: BufferContents> DualBufferWithFullCopy<[T]> {
+    pub fn write_staging(&mut self) -> BufferWriteGuard<'_, [T]> {
+        self.staging.write().unwrap()
     }
 }

@@ -1,17 +1,18 @@
 use std::sync::Arc;
+use std::time::Duration;
 use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, SecondaryAutoCommandBuffer};
 use vulkano::device::{Device, Queue};
 use vulkano::sync;
 use vulkano::sync::future::FenceSignalFuture;
 use vulkano::sync::GpuFuture;
-use crate::renderer::component::DataComponentSet;
+use crate::renderer::component::{DataComponentSet};
 use crate::renderer::context::Context;
 
 pub struct TransferManager<CBA: CommandBufferAllocator> {
     always_transfer_command_buffer: Arc<SecondaryAutoCommandBuffer>,
     dynamic_command_buffer_allocator: CBA,
-    transfer_fence: Option<Arc<FenceSignalFuture<dyn GpuFuture>>>
+    transfer_fence: Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>,
 }
 
 impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
@@ -36,9 +37,7 @@ impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
                 CommandBufferInheritanceInfo::default(),
             ).unwrap();
 
-            for component in component_set.dynamic_components_mut() {
-                component.buffer_scheme.record_repeated_transfer(&mut builder);
-            }
+            component_set.record_repeated_transfer(&mut builder);
 
             builder.build().unwrap()
         };
@@ -50,12 +49,18 @@ impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
         }
     }
 
+    pub fn wait_for_staging_buffers(&self, timeout: Option<Duration>) {
+        if let Some(tf) = &self.transfer_fence {
+            tf.wait(timeout).unwrap();
+        }
+    }
+
     pub fn start_transfer(
         &mut self,
         device: Arc<Device>,
         queue: Arc<Queue>,
-        component_set: &mut impl DataComponentSet
-    ) -> &Arc<FenceSignalFuture<dyn GpuFuture>> {
+        component_set: &mut impl DataComponentSet,
+    ) -> &Arc<FenceSignalFuture<Box<dyn GpuFuture>>> {
         let previous_transfer_future = match self.transfer_fence.clone() {
             None => {
                 let mut now = sync::now(device);
@@ -74,17 +79,16 @@ impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
 
             builder.execute_commands(self.always_transfer_command_buffer).unwrap();
 
-            for component in component_set.dynamic_components_mut() {
-                component.buffer_scheme.record_transfer_jit(&mut builder);
-            }
+            component_set.record_transfer_jit(&mut builder);
 
             builder.build().unwrap()
         };
 
-        let transfer_future = previous_transfer_future
-            .then_execute(queue, transfer_command_buffer)
-            .unwrap()
-            .then_signal_fence_and_flush();
+        let transfer_future = Box::new(
+                previous_transfer_future
+                .then_execute(queue, transfer_command_buffer)
+                .unwrap()
+        ).then_signal_fence_and_flush();
 
         self.transfer_fence = match transfer_future {
             Ok(value) => Some(Arc::new(value)),

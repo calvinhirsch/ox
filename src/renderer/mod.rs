@@ -1,13 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
-use vulkano::command_buffer::allocator::{
-    CommandBufferAllocator, StandardCommandBufferAllocator,
-    StandardCommandBufferAllocatorCreateInfo,
-};
-use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage,
-    SecondaryAutoCommandBuffer,
-};
+use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::descriptor_set::allocator::DescriptorSetAllocator;
 use winit::window::{CursorGrabMode, Window};
 
@@ -26,15 +19,20 @@ use context::Context;
 use swapchain::SwapchainPipeline;
 use crate::renderer::transfer::TransferManager;
 
-pub struct Renderer<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator, DCBA: CommandBufferAllocator> {
-    components: D,
+pub struct Renderer<
+    D: DataComponentSet,
+    DSA: DescriptorSetAllocator,
+    CBA: CommandBufferAllocator,
+    DCBA: CommandBufferAllocator
+> {
+    component_set: D,
     context: Context,
     swapchain_pipeline: SwapchainPipeline<DSA, CBA>,
     transfer_manager: TransferManager<DCBA>,
 }
 
-pub struct RendererComponentEditor<D> {
-    pub components: D,
+pub struct RendererComponentEditor<'a, D> {
+    pub component_set: &'a mut D,
 }
 
 impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator, DCBA: CommandBufferAllocator>
@@ -44,25 +42,25 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
         context: Context,
         swapchain_pipeline_params: SwapchainPipelineParams<DSA, CBA>,
         window: &Window,
-        component_set: D,
-        dynamic_command_buffer_allocator: impl CommandBufferAllocator,
+        mut component_set: D,
+        dynamic_command_buffer_allocator: DCBA,
     ) -> Self {
         Renderer {
-            components: component_set,
+            component_set,
             context,
             swapchain_pipeline: SwapchainPipeline::new(
                 Arc::clone(&context.device),
                 Arc::clone(&context.compute_queue),
                 Arc::clone(&context.graphics_queue),
                 window.inner_size(),
-                component_set.list_all_components(),
+                &component_set,
                 Arc::clone(&context.physical_device),
                 Arc::clone(&context.surface),
                 swapchain_pipeline_params,
             ),
             transfer_manager: TransferManager::new(
                 &context,
-                component_set.list_all_components(),
+                &mut component_set,
                 dynamic_command_buffer_allocator,
             ),
         }
@@ -81,7 +79,7 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
 
         self.swapchain_pipeline.resize(
             &new_dimensions,
-            self.components.list_all_components(),
+            &self.component_set,
         );
     }
 
@@ -90,17 +88,17 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
     }
 
     pub fn start_updating_staging_buffers(&mut self) -> RendererComponentEditor<D> {
-        self.transfer_manager.wait_for_staging_buffers();
-        RendererComponentEditor { components: &mut self.components }
+        self.transfer_manager.wait_for_staging_buffers(Some(Duration::from_secs(3)));
+        RendererComponentEditor { component_set: &mut self.component_set }
     }
 
     pub fn draw_frame(&mut self) {
-        self.swapchain_pipeline.wait_for_compute_done(Some(Duration::seconds(3)));
+        self.swapchain_pipeline.wait_for_compute_done(Some(Duration::from_secs(3)));
 
         let transfer_fence = self.transfer_manager.start_transfer(
             Arc::clone(&self.context.device),
             Arc::clone(&self.context.transfer_queue),
-            &mut self.components,
+            &mut self.component_set,
         );
 
         self.swapchain_pipeline.present(Arc::clone(&self.context.device), transfer_fence);

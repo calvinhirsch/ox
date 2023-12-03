@@ -1,11 +1,11 @@
-use crate::renderer::buffers::{DynamicBufferScheme};
-use crate::renderer::component::{DataComponent, DataComponentSet};
+use crate::renderer::component::{DataComponent, DataComponentWrapper};
 use crate::world::camera::Camera;
 use cgmath::{Angle, Array, Point3, Rad, Vector3};
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer, DualBufferWithFullCopy};
+use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithFullCopy};
+use crate::world::VoxelPos;
 
 pub struct RendererCamera {
     comp: DataComponent<DualBufferWithFullCopy<CameraUBO>>,
@@ -14,25 +14,27 @@ impl RendererCamera {
     pub fn new(binding: u32, allocator: Arc<dyn MemoryAllocator>) -> Self {
         RendererCamera {
             comp: DataComponent {
-                buffer_scheme: DualBuffer::from_data(CameraUBO::new_blank(), allocator, true).with_full_copy(),
+                buffer_scheme: DualBuffer::from_data(
+                    CameraUBO::new_blank(),
+                    allocator,
+                    true
+                ).with_full_copy(),
                 binding,
             },
         }
     }
 
     pub fn update_staging_buffer(&mut self, camera: &Camera) {
-        let mut w = self.comp.buffer_scheme.write_staging().unwrap();
-        w.update(camera, Point3::<f32>::from_value(0.));
+        let mut w = self.comp.buffer_scheme.write_staging();
+        w.update(camera, VoxelPos(Point3::<f32>::from_value(0.)));
     }
 }
-impl DataComponentSet for RendererCamera {
-    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
-        vec![&mut self.comp]
-    }
+impl DataComponentWrapper for RendererCamera {
+    type B = DualBufferWithFullCopy<CameraUBO>;
 
-    fn constant_components_mut(&self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
-        vec![]
-    }
+    fn comp(&self) -> &DataComponent<Self::B> { &self.comp }
+
+    fn comp_mut(&mut self) -> &mut DataComponent<Self::B> { &mut self.comp }
 }
 
 /// Uniform buffer object containing camera info that gets passed to the GPU
@@ -63,13 +65,13 @@ impl CameraUBO {
         }
     }
 
-    pub fn new(camera: &Camera, origin: Point3<f32>) -> Self {
+    pub fn new(camera: &Camera, origin: VoxelPos<f32>) -> Self {
         let mut s = CameraUBO::new_blank();
         s.update(camera, origin);
         s
     }
 
-    pub fn update(&mut self, camera: &Camera, origin: Point3<f32>) {
+    pub fn update(&mut self, camera: &Camera, origin: VoxelPos<f32>) {
         let avg_res = (camera.resolution.0 + camera.resolution.1) as f32 / 2.;
         let avg_viewport_dim = camera.viewport_dist * (camera.avg_fov / 2.0).tan();
         let viewport_half_dims = (
@@ -77,12 +79,12 @@ impl CameraUBO {
             avg_viewport_dim * camera.resolution.1 as f32 / avg_res,
         );
 
-        self.eye = (camera.position - origin).try_into().unwrap();
+        self.eye = (camera.position.0 - origin.0).try_into().unwrap();
 
         let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
         let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
 
-        self.viewport_center = (camera.position - origin
+        self.viewport_center = (camera.position.0 - origin.0
             + Vector3 {
                 x: yaw_cos * pitch_cos * camera.viewport_dist,
                 y: -pitch_sin * camera.viewport_dist,

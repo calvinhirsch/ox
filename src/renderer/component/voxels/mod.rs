@@ -1,9 +1,8 @@
-use crate::renderer::buffers::{DynamicBufferScheme};
 use crate::renderer::component::voxels::lod::{RendererVoxelLOD, VoxelLODUpdate};
-use crate::renderer::component::{DataComponent, DataComponentSet};
-use itertools::Itertools;
-use vulkano::buffer::BufferContents;
-use crate::renderer::buffers::dual::ConstantDeviceLocalBuffer;
+use crate::renderer::component::{DataComponentSet};
+use vulkano::command_buffer::allocator::CommandBufferAllocator;
+use vulkano::command_buffer::AutoCommandBufferBuilder;
+use vulkano::descriptor_set::WriteDescriptorSet;
 
 pub mod data;
 pub mod lod;
@@ -33,11 +32,27 @@ impl VoxelData {
 }
 
 impl DataComponentSet for VoxelData {
-    fn dynamic_components_mut(&mut self) -> Vec<&mut DataComponent<dyn DynamicBufferScheme>> {
-        self.lods.iter().flatten().filter_map_ok(|o| o?).collect()
+    fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
+        for lod_o in self.lods.iter().flatten() {
+            if let Some(lod) = lod_o {
+                lod.bind(descriptor_writes);
+            }
+        }
     }
 
-    fn constant_components_mut(&mut self) -> Vec<&mut DataComponent<ConstantDeviceLocalBuffer<dyn BufferContents>>> {
-        vec![]
+    fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+        for lod_o in self.lods.iter().flatten() {
+            if let Some(lod) = lod_o {
+                lod.record_repeated_transfer(builder);
+            }
+        }
+    }
+
+    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+        for lod_o in self.lods.iter().flatten() {
+            if let Some(mut lod) = lod_o {
+                lod.record_transfer_jit(builder);
+            }
+        }
     }
 }
