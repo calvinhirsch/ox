@@ -21,9 +21,9 @@ use crate::renderer::transfer::TransferManager;
 
 pub struct Renderer<
     D: DataComponentSet,
-    DSA: DescriptorSetAllocator,
-    CBA: CommandBufferAllocator,
-    DCBA: CommandBufferAllocator
+    DSA: DescriptorSetAllocator + 'static,
+    CBA: CommandBufferAllocator + 'static,
+    DCBA: CommandBufferAllocator + 'static
 > {
     component_set: D,
     context: Context,
@@ -35,7 +35,7 @@ pub struct RendererComponentEditor<'a, D> {
     pub component_set: &'a mut D,
 }
 
-impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator, DCBA: CommandBufferAllocator>
+impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator + 'static, DCBA: CommandBufferAllocator + 'static>
     Renderer<D, DSA, CBA, DCBA>
 {
     pub fn new(
@@ -45,24 +45,28 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
         mut component_set: D,
         dynamic_command_buffer_allocator: DCBA,
     ) -> Self {
+        let swapchain_pipeline = SwapchainPipeline::new(
+            Arc::clone(&context.device),
+            Arc::clone(&context.compute_queue),
+            Arc::clone(&context.graphics_queue),
+            window.inner_size(),
+            &component_set,
+            Arc::clone(&context.physical_device),
+            Arc::clone(&context.surface),
+            swapchain_pipeline_params,
+        );
+
+        let transfer_manager = TransferManager::new(
+            &context,
+            &mut component_set,
+            dynamic_command_buffer_allocator,
+        );
+
         Renderer {
             component_set,
             context,
-            swapchain_pipeline: SwapchainPipeline::new(
-                Arc::clone(&context.device),
-                Arc::clone(&context.compute_queue),
-                Arc::clone(&context.graphics_queue),
-                window.inner_size(),
-                &component_set,
-                Arc::clone(&context.physical_device),
-                Arc::clone(&context.surface),
-                swapchain_pipeline_params,
-            ),
-            transfer_manager: TransferManager::new(
-                &context,
-                &mut component_set,
-                dynamic_command_buffer_allocator,
-            ),
+            swapchain_pipeline,
+            transfer_manager,
         }
     }
 

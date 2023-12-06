@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, SecondaryAutoCommandBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage, SecondaryCommandBufferAbstract};
 use vulkano::device::{Device, Queue};
 use vulkano::sync;
 use vulkano::sync::future::FenceSignalFuture;
@@ -10,12 +10,12 @@ use crate::renderer::component::{DataComponentSet};
 use crate::renderer::context::Context;
 
 pub struct TransferManager<CBA: CommandBufferAllocator> {
-    always_transfer_command_buffer: Arc<SecondaryAutoCommandBuffer>,
+    always_transfer_command_buffer: Arc<dyn SecondaryCommandBufferAbstract>,
     dynamic_command_buffer_allocator: CBA,
     transfer_fence: Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>,
 }
 
-impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
+impl<CBA: CommandBufferAllocator + 'static> TransferManager<CBA> {
     pub fn new(
         context: &Context,
         component_set: &mut impl DataComponentSet,
@@ -77,18 +77,18 @@ impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
                 CommandBufferUsage::MultipleSubmit,
             ).unwrap();
 
-            builder.execute_commands(self.always_transfer_command_buffer).unwrap();
+            builder.execute_commands(Arc::clone(&self.always_transfer_command_buffer)).unwrap();
 
             component_set.record_transfer_jit(&mut builder);
 
             builder.build().unwrap()
         };
 
-        let transfer_future = Box::new(
+        let transfer_future = (Box::new(
                 previous_transfer_future
                 .then_execute(queue, transfer_command_buffer)
                 .unwrap()
-        ).then_signal_fence_and_flush();
+        ) as Box<dyn GpuFuture>).then_signal_fence_and_flush();
 
         self.transfer_fence = match transfer_future {
             Ok(value) => Some(Arc::new(value)),
@@ -98,6 +98,6 @@ impl<CBA: CommandBufferAllocator> TransferManager<CBA> {
             }
         };
 
-        &self.transfer_fence.unwrap()
+        self.transfer_fence.as_ref().unwrap()
     }
 }

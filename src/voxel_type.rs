@@ -1,5 +1,5 @@
 use enum_iterator::{all, Sequence};
-use num_traits::{FromPrimitive, PrimInt, ToPrimitive};
+use num_traits::{FromPrimitive, ToPrimitive};
 use crate::renderer::component::materials::Material;
 
 

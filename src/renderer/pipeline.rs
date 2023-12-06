@@ -16,7 +16,7 @@ use vulkano::shader::ShaderModule;
 use vulkano::sync::GpuFuture;
 use winit::dpi::PhysicalSize;
 
-pub struct ComputeRenderPipeline<CBA: CommandBufferAllocator> {
+pub struct ComputeRenderPipeline<CBA: CommandBufferAllocator + 'static> {
     subgroup_width: u32,
     subgroup_height: u32,
     image_binding: u32,
@@ -27,7 +27,7 @@ pub struct ComputeRenderPipeline<CBA: CommandBufferAllocator> {
 }
 
 impl<CBA: CommandBufferAllocator> ComputeRenderPipeline<CBA> {
-    pub fn create_command_buffers<DSA: DescriptorSetAllocator>(
+    pub fn create_command_buffers<DSA: 'static + DescriptorSetAllocator>(
         subgroup_width: u32,
         subgroup_height: u32,
         device: Arc<Device>,
@@ -109,7 +109,7 @@ impl<CBA: CommandBufferAllocator> ComputeRenderPipeline<CBA> {
             .collect()
     }
 
-    pub fn new<DSA: DescriptorSetAllocator>(
+    pub fn new<DSA: DescriptorSetAllocator + 'static>(
         subgroup_width: u32,
         subgroup_height: u32,
         device: Arc<Device>,
@@ -145,7 +145,7 @@ impl<CBA: CommandBufferAllocator> ComputeRenderPipeline<CBA> {
         }
     }
 
-    pub fn recreate<DSA: DescriptorSetAllocator>(
+    pub fn recreate<DSA: DescriptorSetAllocator + 'static>(
         &mut self,
         images: &[Arc<Image>],
         descriptor_set_allocator: &DSA,

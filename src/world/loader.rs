@@ -35,12 +35,12 @@ pub trait LoadChunk<QI> {
 }
 
 
-pub struct ChunkLoader<QI, C: LoadChunk<QI>> {
+pub struct ChunkLoader<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> {
     queue_item_data_type: PhantomData<QI>,
     queue: VecDeque<Receiver<(TLCPos<i64>, C)>>
 }
 
-impl<QI, C: LoadChunk<QI>> ChunkLoader<QI, C> {
+impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
     pub fn new() -> Self {
         ChunkLoader { queue_item_data_type: PhantomData::default(), queue: VecDeque::new() }
     }
@@ -51,7 +51,8 @@ impl<QI, C: LoadChunk<QI>> ChunkLoader<QI, C> {
         pos: TLCPos<i64>,
     ) -> Option<usize> {
         let pt = pos.0 - start_tlc.0;
-        if pt >= Vector3::from_value(grid.size() as i64) {
+        let max = Vector3::from_value(grid.size() as i64);
+        if pt.x >= max.x || pt.y >= max.y || pt.z >= max.z || pt.x < 0 || pt.y < 0 || pt.z < 0  {
             None
         }
         else {
@@ -71,11 +72,11 @@ impl<QI, C: LoadChunk<QI>> ChunkLoader<QI, C> {
         queue: Vec<ChunkLoadQueueItem<QI>>
     ) {
         // Receive chunks that have finished loading and put them in "chunks"
-        for receiver in self.queue {
+        for receiver in self.queue.iter_mut() {
             receiver.try_recv().and_then(|(pos, chunk_data)| {
                 match ChunkLoader::grid_index(start_tlc, grid, pos) {
                     None => {},
-                    Some(index) => { grid[index] = chunk_data; }
+                    Some(index) => { grid.chunks[index] = Some(chunk_data); }
                 }
                 Ok(())
             }).unwrap();
@@ -88,10 +89,10 @@ impl<QI, C: LoadChunk<QI>> ChunkLoader<QI, C> {
             let grid_index = ChunkLoader::grid_index(start_tlc, grid, qi.pos)
                 .expect("A chunk was queued for loading that is not in bounds of current grid.");
 
-            let chunk = mem::replace(grid[grid_index], vec![]);
+            let chunk = mem::replace(&mut grid.chunks[grid_index], None);
 
             thread::spawn(move || {
-                sender.send((qi.pos, chunk.load(qi))).unwrap();
+                sender.send((qi.pos, chunk.unwrap().load_new(qi))).unwrap();
             });
 
             self.queue.push_back(receiver);

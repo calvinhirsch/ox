@@ -9,7 +9,7 @@ pub const fn pos_index(pos: Vector3<usize>, size: usize) -> usize {
     pos.x + pos.y * size * size + pos.z * size
 }
 
-pub const fn amod(n: Vector3<i64>, d: usize) -> Vector3<usize> {
+pub fn amod(n: Vector3<i64>, d: usize) -> Vector3<usize> {
     (((n % d as i64) + Vector3::<i64>::from_value(d as i64)) % d as i64)
         .cast::<usize>()
         .unwrap()

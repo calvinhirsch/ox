@@ -25,7 +25,7 @@ impl Context {
     pub fn new(event_loop: &EventLoop<()>) -> (Self, Arc<Window>) {
         let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
 
-        let required_extensions = Surface::required_extensions(&event_loop);
+        let required_extensions = Surface::required_extensions(event_loop);
         let instance = Instance::new(
             library,
             InstanceCreateInfo {
@@ -134,7 +134,7 @@ impl Context {
         )
         .expect("failed to create device");
 
-        let queues = queues.collect();
+        let queues: Vec<_> = queues.collect();
         let (transfer_queue, compute_queue, graphics_queue) = (
             queues[queue_family_idxs[0] as usize].clone(),
             queues[queue_family_idxs[1] as usize].clone(),

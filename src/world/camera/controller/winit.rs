@@ -1,8 +1,7 @@
 use std::f32::consts::PI;
 use std::time::Duration;
 use cgmath::{InnerSpace, Rad, Vector3};
-use winit::event::ElementState;
-use winit::keyboard::KeyCode;
+use winit::event::{ElementState, VirtualKeyCode};
 use crate::world::camera::Camera;
 use crate::world::camera::controller::CameraController;
 
@@ -33,7 +32,7 @@ impl CameraController for WinitCameraController {
         let (yaw_sin, yaw_cos) = camera.yaw.0.sin_cos();
         let forward = Vector3::new(yaw_cos, 0.0, -yaw_sin).normalize();
         let right = Vector3::new(-yaw_sin, 0.0, -yaw_cos).normalize();
-        camera.position += forward
+        camera.position.0 += forward
             * (self.amount_forward - self.amount_backward)
             * self.speed
             * dt;
@@ -78,34 +77,34 @@ impl WinitCameraController {
         }
     }
 
-    pub fn process_keyboard(&mut self, key: KeyCode, state: ElementState) -> bool {
+    pub fn process_keyboard(&mut self, key: VirtualKeyCode, state: ElementState) -> bool {
         let amount = if state == ElementState::Pressed {
             1.0
         } else {
             0.0
         };
         match key {
-            KeyCode::KeyW | KeyCode::ArrowUp => {
+            VirtualKeyCode::W | VirtualKeyCode::Up => {
                 self.amount_forward = amount;
                 true
             }
-            KeyCode::KeyS | KeyCode::ArrowDown => {
+            VirtualKeyCode::S | VirtualKeyCode::Down => {
                 self.amount_backward = amount;
                 true
             }
-            KeyCode::KeyA | KeyCode::ArrowLeft => {
+            VirtualKeyCode::A | VirtualKeyCode::Left => {
                 self.amount_left = amount;
                 true
             }
-            KeyCode::KeyD | KeyCode::ArrowRight => {
+            VirtualKeyCode::D | VirtualKeyCode::Right => {
                 self.amount_right = amount;
                 true
             }
-            KeyCode::Space => {
+            VirtualKeyCode::Space => {
                 self.amount_up = amount;
                 true
             }
-            KeyCode::ShiftLeft => {
+            VirtualKeyCode::LShift => {
                 self.amount_down = amount;
                 true
             }

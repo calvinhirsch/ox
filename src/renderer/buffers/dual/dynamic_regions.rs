@@ -4,10 +4,9 @@ use std::mem::size_of;
 use derive_new::new;
 use smallvec::SmallVec;
 use vulkano::buffer::{BufferContents, Subbuffer};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferInfo, CopyBufferInfoTyped};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferInfo};
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::descriptor_set::WriteDescriptorSet;
-use vulkano::NonExhaustive;
 use crate::renderer::buffers::{BufferScheme};
 
 

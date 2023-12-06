@@ -49,8 +49,8 @@ impl DataComponentSet for VoxelData {
     }
 
     fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        for lod_o in self.lods.iter().flatten() {
-            if let Some(mut lod) = lod_o {
+        for lod_o in self.lods.iter_mut().flatten() {
+            if let Some(ref mut lod) = lod_o {
                 lod.record_transfer_jit(builder);
             }
         }

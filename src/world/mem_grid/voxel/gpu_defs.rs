@@ -14,15 +14,15 @@ impl Into<Vec<VoxelTypeIDs>> for ChunkVoxelIDs {
         self.0
     }
 }
-impl<'a> Index<usize> for ChunkVoxelIDs {
+impl Index<usize> for ChunkVoxelIDs {
     type Output = u8;
     fn index(&self, i: usize) -> &u8 {
-        &self.0[i * (8 / 128)].indices[i % (8 / 128)]
+        &self.0[i * 8 / 128].indices[i % 8 / 128]
     }
 }
-impl<'a> IndexMut<usize> for ChunkVoxelIDs {
+impl IndexMut<usize> for ChunkVoxelIDs {
     fn index_mut(&mut self, i: usize) -> &mut u8 {
-        &mut self.0[i * (8 / 128)].indices[i % (8 / 128)]
+        &mut self.0[i * 8 / 128].indices[i % 8 / 128]
     }
 }
 

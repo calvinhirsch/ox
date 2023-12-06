@@ -1,7 +1,6 @@
 use cgmath::{Array, Point3, Vector3};
 use std::marker::PhantomData;
 use std::time::Duration;
-use num_traits::real::Real;
 use num_traits::Zero;
 
 pub mod mem_grid;
@@ -11,22 +10,22 @@ pub mod loader;
 
 use camera::{Camera, controller::CameraController};
 use crate::world::loader::{ChunkLoader, ChunkLoadQueueItem, LoadChunk};
-use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, ToVirtual, VirtualMemoryGridStruct};
 
 /// Position in units of top level chunks
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct TLCPos<T>(pub Point3<T>);
 
 /// Vector in units of top level chunks
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct TLCVector<T>(pub Vector3<T>);
 
 /// Position in units of 1 (i.e. LOD 0 voxels)
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VoxelPos<T>(pub Point3<T>);
 
 /// Vector in units of 1 (i.e. LOD 0 voxels)
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VoxelVector<T>(pub Vector3<T>);
 
 
@@ -37,8 +36,8 @@ pub struct WorldMetadata {
 }
 
 pub struct World<MG, PMG, C, VMD>
-where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
-      C: LoadChunk<PMG::ChunkLoadQueueItemData>,
+where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD> + PhysicalMemoryGrid,
+      C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send + 'static,
       VMD: MemoryGridMetadata {
     physical_type: PhantomData<PMG>,
     chunk_data_type: PhantomData<C>,
@@ -60,7 +59,7 @@ pub enum BufferChunkState {
 
 impl<PMG, C, VMD> World<PMG, PMG, C, VMD>
 where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
-      C: LoadChunk<PMG::ChunkLoadQueueItemData>,
+      C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send,
       VMD: MemoryGridMetadata{
     pub fn new(
         mem_grid: PMG,
@@ -182,7 +181,7 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
 
 impl<C, VMD, PMG> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD>
 where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
-      C: LoadChunk<PMG::ChunkLoadQueueItemData>,
+      C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send,
       VMD: MemoryGridMetadata {
     pub fn lock(self) -> World<PMG, PMG, C, VMD> {
         World {

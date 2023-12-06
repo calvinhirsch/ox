@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 vulkano = "0.34.1"
 vulkano-shaders = "0.34.0"
-winit = "0.29.4"
+winit = "0.28.7"
 itertools = "0.12.0"
 num = "0.4.1"
 num-derive = "0.4.1"

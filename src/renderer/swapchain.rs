@@ -23,7 +23,7 @@ pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBuff
     pub command_buffer_allocator: CBA,
 }
 
-pub struct SwapchainPipeline<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {
+pub struct SwapchainPipeline<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static> {
     params: SwapchainPipelineParams<DSA, CBA>,
     images: Vec<Arc<Image>>,
     graphics_queue: Arc<Queue>,
@@ -36,7 +36,7 @@ pub struct SwapchainPipeline<DSA: DescriptorSetAllocator, CBA: CommandBufferAllo
     prev_fence_i: u32,
 }
 
-impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline<DSA, CBA> {
+impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static> SwapchainPipeline<DSA, CBA> {
     fn new_pipeline(
         images: Vec<Arc<Image>>,
         device: Arc<Device>,
@@ -70,7 +70,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
         surface: Arc<Surface>,
         params: SwapchainPipelineParams<DSA, CBA>,
     ) -> Self {
-        let (mut swapchain, images) = {
+        let (swapchain, images) = {
             let caps = physical_device
                 .surface_capabilities(&surface, Default::default())
                 .expect("failed to get surface capabilities");
@@ -110,6 +110,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             component_set,
         );
 
+        let len = images.len();
         SwapchainPipeline {
             params,
             images,
@@ -118,7 +119,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             pipeline,
             recreate: false,
             compute_fence: None,
-            present_fences: vec![None; images.len()],
+            present_fences: vec![None; len],
             prev_fence_i: 0,
         }
     }
@@ -128,7 +129,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
         dimensions: &PhysicalSize<u32>,
         component_set: &impl DataComponentSet,
     ) {
-        self.recreate_with_dims(dimensions);
+        self.recreate_with_dims(dimensions.clone());
         self.pipeline.recreate(
             &self.images,
             &self.params.descriptor_set_allocator,
@@ -160,7 +161,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
         }
     }
 
-    pub fn present(&mut self, device: Arc<Device>, transfer_fence: &Arc<FenceSignalFuture<impl GpuFuture>>) {
+    pub fn present(&mut self, device: Arc<Device>, transfer_fence: &Arc<FenceSignalFuture<Box<dyn GpuFuture>>>) {
         if self.recreate {
             self.recreate();
             self.recreate = false;
@@ -204,7 +205,7 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             .join(acquire_future);
 
         let compute_future =
-            Box::new(self.pipeline.execute(curr_future, image_i as usize)).then_signal_fence_and_flush();
+            (Box::new(self.pipeline.execute(curr_future, image_i as usize)) as Box<dyn GpuFuture>).then_signal_fence_and_flush();
 
         self.compute_fence = match compute_future {
             Ok(value) => Some(Arc::new(value)),
@@ -214,13 +215,13 @@ impl<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> SwapchainPipeline
             }
         };
 
-        let future = Box::new(
-            Arc::clone(&self.compute_fence.unwrap())
+        let future = (Box::new(
+            Arc::clone(self.compute_fence.as_ref().unwrap())
                 .then_swapchain_present(
                     Arc::clone(&self.graphics_queue),
                     SwapchainPresentInfo::swapchain_image_index(Arc::clone(&self.swapchain), image_i),
                 )
-        ).then_signal_fence_and_flush();
+        ) as Box<dyn GpuFuture>).then_signal_fence_and_flush();
 
         self.present_fences[image_i as usize] = match future {
             Ok(value) => Some(Arc::new(value)),

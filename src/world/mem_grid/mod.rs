@@ -8,13 +8,14 @@ mod layer_set;
 pub mod utils;
 pub mod voxel;
 
-#[derive(new)]
+
+#[derive(new, Clone)]
 pub struct PhysicalMemoryGridStruct<D, MD: MemoryGridMetadata> {
     pub data: D,
     pub metadata: MD,
 }
 
-#[derive(new)]
+#[derive(new, Clone)]
 pub struct VirtualMemoryGridStruct<C, MD: MemoryGridMetadata> {
     pub chunks: Vec<Option<C>>,
     pub metadata: MD
@@ -39,7 +40,7 @@ impl<C, MD: MemoryGridMetadata> VirtualMemoryGridStruct<C, MD> {
 pub trait PhysicalMemoryGrid: Deref<Target = PhysicalMemoryGridStruct<Self::Data, Self::Metadata>> + Sized {
     type Data;
     type Metadata: MemoryGridMetadata;
-    type ChunkLoadQueueItemData;
+    type ChunkLoadQueueItemData: Send + 'static;
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     fn shift(&mut self, shift: TLCVector<i32>, load_in_from_edge: TLCVector<i32>, load_buffer: [bool; 3]) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
 }
@@ -47,7 +48,8 @@ pub trait PhysicalMemoryGrid: Deref<Target = PhysicalMemoryGridStruct<Self::Data
 
 pub trait ToVirtual<C, MD: MemoryGridMetadata>: PhysicalMemoryGrid {
     fn to_virtual(self) -> VirtualMemoryGridStruct<C, MD> {
-        self.to_virtual_for_size(self.size())
+        let size = self.size();
+        self.to_virtual_for_size(size)
     }
 
     fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<C, MD>;
@@ -55,7 +57,8 @@ pub trait ToVirtual<C, MD: MemoryGridMetadata>: PhysicalMemoryGrid {
 
 pub trait FromVirtual<C, MD: MemoryGridMetadata>: PhysicalMemoryGrid {
     fn from_virtual(virtual_grid: VirtualMemoryGridStruct<C, MD>) -> Self {
-        Self::from_virtual_for_size(virtual_grid, virtual_grid.metadata.size())
+        let size = virtual_grid.size();
+        Self::from_virtual_for_size(virtual_grid, size)
     }
 
     fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<C, MD>, vgrid_size: usize) -> Self;

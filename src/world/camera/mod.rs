@@ -22,11 +22,11 @@ impl Default for Camera {
                 y: 0.,
                 z: 0.,
             }),
-            yaw: 0.into(),
-            pitch: 0.into(),
+            yaw: Rad(0.),
+            pitch: Rad(0.),
             viewport_dist: 0.1,
             resolution: (0, 0),
-            avg_fov: 90.into(),
+            avg_fov: Rad(90.),
         }
     }
 }

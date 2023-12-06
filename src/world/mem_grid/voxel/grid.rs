@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use super::lod::{VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams, VoxelLODMetadata};
+use cgmath::{Array, Vector3};
+use super::lod::{VirtualVoxelLOD, VirtualVoxelLODMetadata, VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams};
 use crate::renderer::component::voxels::VoxelData;
 use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector};
 use derive_more::Deref;
 use hashbrown::{HashMap};
-use itertools::Itertools;
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::world::loader::ChunkLoadQueueItem;
@@ -21,7 +21,7 @@ pub struct VoxelMemoryGridData {
     lods: Vec<Vec<Option<VoxelLOD>>>
 }
 
-struct VoxelMemoryGridMetadata {
+pub struct VoxelMemoryGridMetadata {
     size: usize,
     n_lvls: usize,
     n_lods: usize,
@@ -32,7 +32,7 @@ impl MemoryGridMetadata for VoxelMemoryGridMetadata {
 
 pub struct VirtualVoxelMemoryGridMetadata {
     this: VoxelMemoryGridMetadata,
-    lods: Vec<Vec<Option<VoxelLODMetadata>>>
+    lods: Vec<Vec<Option<VirtualVoxelLODMetadata>>>
 }
 impl MemoryGridMetadata for VirtualVoxelMemoryGridMetadata {
     fn size(&self) -> usize { self.this.size }
@@ -62,12 +62,11 @@ impl VoxelMemoryGrid {
         let size = lod_params
             .iter()
             .flatten()
-            .filter_map_ok(|p| Some(p?.size))
-            .iter()
+            .filter_map(|p| Some(p.as_ref()?.size))
             .max()
             .unwrap();
         let n_lvls = lod_params.len();
-        let n_lods = lod_params.iter().next().unwrap().len();
+        let n_lods = lod_params.first().unwrap().len();
 
         let (grid_lods, lods) = lod_params
             .into_iter()
@@ -76,17 +75,23 @@ impl VoxelMemoryGrid {
                 lvl_sizes
                     .into_iter()
                     .enumerate()
-                    .map(|(lod, params)| {
-                        let voxels_per_tlc = Self::voxels_per_tlc(chunk_size, n_lvls, lvl, lod);
-                        VoxelLOD::new(
-                            params?,
-                            voxels_per_tlc,
-                            start_tlc + (size - params?.size)/2,
-                            tlc_size,
-                            memory_allocator
-                        )
-                    })
-                    .unzip()
+                    .map(|(lod, params_o)| {
+                        match params_o {
+                            None => (None, None),
+                            Some(params) => {
+                                let voxels_per_tlc = Self::voxels_per_tlc(chunk_size, n_lvls, lvl, lod);
+                                let lod_start_tlc = TLCPos(start_tlc.0 + Vector3::from_value(((size - params.size)/2) as i64));
+                                let (a, b) = VoxelLOD::new(
+                                    params,
+                                    voxels_per_tlc,
+                                    lod_start_tlc,
+                                    tlc_size,
+                                    Arc::clone(&memory_allocator),
+                                );
+                                (Some(a), Some(b))
+                            }
+                        }
+                    }).unzip()
             })
             .unzip();
 
@@ -105,33 +110,34 @@ impl VoxelMemoryGrid {
         )
     }
 
-    pub fn get_updates(&mut self) -> Vec<Vec<Option<VoxelLODUpdate>>> {
-        self.data.lods
+    pub fn get_updates(&mut self) -> Vec<Vec<Option<Vec<VoxelLODUpdate>>>> {
+        self.0.data.lods
             .iter_mut()
-            .flat_map(|lod_o| match lod_o {
-                None => None,
-                Some(lod) => lod.aggregate_updates(),
-            })
-            .collect()
+            .map(|lvl_lods|
+                lvl_lods.iter_mut().map(|lod_o|
+                    lod_o.as_mut().map(|lod| lod.aggregate_updates(true))
+                ).collect()
+            ).collect()
     }
 
-    fn apply_and_queue<F: FnOnce(&mut VoxelLOD) -> Vec<ChunkLoadQueueItem<()>>>(
+    fn apply_and_queue<F: FnMut(&mut VoxelLOD) -> Vec<ChunkLoadQueueItem<()>>>(
         &mut self,
-        to_apply: F
+        mut to_apply: F
     ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadingQueueItemData>> {
         let mut chunks = HashMap::new();
+        let (n_lods, n_lvls) = (self.metadata.n_lods, self.metadata.n_lvls);
 
-        for (lvl, lvl_lods) in self.data.lods.iter_mut().enumerate() {
+        for (lvl, lvl_lods) in self.0.data.lods.iter_mut().enumerate() {
             for (lod, lod_o) in lvl_lods.iter_mut().enumerate() {
                 match lod_o {
                     None => {},
                     Some(lod_data) => {
                         for item in to_apply(lod_data) {
-                            let mut e = chunks.entry(&item.pos).or_insert(
+                            let e = chunks.entry(item.pos.0).or_insert(
                                 ChunkLoadQueueItem {
                                     pos: item.pos,
                                     data: VoxelChunkLoadingQueueItemData {
-                                        lods: vec![vec![false; self.metadata.n_lods]; self.metadata.n_lvls],
+                                        lods: vec![vec![false; n_lods]; n_lvls],
                                     }
                                 }
                             );
@@ -165,22 +171,31 @@ impl PhysicalMemoryGrid for VoxelMemoryGrid {
 }
 impl ToVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid {
     fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> {
-        let v_lods = self.0.data.lods
+        let (chunk_iters, metadata): (Vec<Vec<_>>, Vec<Vec<_>>) =
+            self.0.data.lods.into_iter()
             .map(|lvl_lods| {
-                lvl_lods
+                lvl_lods.into_iter()
                     .map(|lod_o| match lod_o {
                         None => (None, None),
-                        Some(lod) => lod.as_virtual_for_size(grid_size).deconstruct(),
+                        Some(lod) => {
+                            let (a, b) =
+                                lod.to_virtual_for_size(grid_size).deconstruct();
+                            (Some(a.into_iter()), Some(b))
+                        },
                     })
-                    .collect()
+                    .unzip()
             })
-            .collect();
+            .unzip();
 
         VirtualMemoryGridStruct::new(
-            LODSplitter(v_lods).into_iter().collect(),
+            LODSplitter(chunk_iters).map(
+                |chunk_lods| Some(VoxelMemoryGridChunkData {
+                    lods: chunk_lods,
+                })
+            ).collect(),
             VirtualVoxelMemoryGridMetadata {
                 this: self.0.metadata,
-                lods: vec![],
+                lods: metadata,
             }
         )
     }
@@ -189,9 +204,9 @@ impl FromVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for V
     fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata>, grid_size: usize) -> Self {
         let (data, metadata) = virtual_grid.deconstruct();
 
-        let mut grids = metadata.lods.iter().map(|lvl_meta|
+        let mut chunk_data: Vec<Vec<Option<Vec<Option<VoxelLODChunkData>>>>> = metadata.lods.iter().map(|lvl_meta|
             lvl_meta.iter().map(|meta|
-                meta.and_then(|m| Some(vec![None; cubed(grid_size)]))
+                meta.as_ref().map(|_| vec![None; cubed(grid_size)])
             ).collect()
         ).collect();
 
@@ -199,8 +214,8 @@ impl FromVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for V
             if let Some(chunk) = chunk_o {
                 for (lvl, chunk_lvl) in chunk.lods.into_iter().enumerate() {
                     for (lod, chunk_lod) in chunk_lvl.into_iter().enumerate() {
-                        if let Some(_) = chunk_lod {
-                           grids[lvl][lod].unwrap()[i] = chunk_lod;
+                        if chunk_lod.is_some() {
+                           chunk_data[lvl][lod].as_mut().unwrap()[i] = chunk_lod;
                         }
                     }
                 }
@@ -210,12 +225,27 @@ impl FromVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for V
         VoxelMemoryGrid(
             PhysicalMemoryGridStruct::new(
                 VoxelMemoryGridData {
-                    lods: grids.into_iter().zip(metadata.lods.into_iter()).map(|(grid, meta)|
-                        VirtualMemoryGridStruct::new(
-                            grid,
-                            meta,
-                        )
-                    )
+                    lods: chunk_data.into_iter().zip(metadata.lods)
+                        .map(|(lvl_chunk_data, lvl_meta)|
+                            lvl_chunk_data.into_iter().zip(lvl_meta)
+                                .map(|(lod_chunk_data, meta)|
+                                    match (lod_chunk_data, meta) {
+                                        (None, None) => None,
+                                        (Some(cd), Some(m)) => {
+                                            Some(
+                                                VoxelLOD::from_virtual_for_size(
+                                                    VirtualVoxelLOD::new(
+                                                        cd,
+                                                        m,
+                                                    ),
+                                                    grid_size
+                                                )
+                                            )
+                                        }
+                                        _ => panic!(),
+                                    }
+                            ).collect()
+                    ).collect()
                 },
                 metadata.this,
             )
@@ -231,7 +261,7 @@ impl<I: Iterator> Iterator for LODSplitter<I> {
     fn next(&mut self) -> Option<Self::Item> {
         self.0
             .iter_mut()
-            .map(|iters| iters.iter().filter_map_ok(|iter| iter?.next()).collect())
+            .map(|iters| iters.iter_mut().map(|iter| iter.as_mut()?.next()).collect())
             .collect()
     }
 }

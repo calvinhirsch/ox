@@ -41,7 +41,7 @@ pub struct MemoryGridLayerChunkData<C: Clone> {
 
 
 impl<C: Clone, MD> PhysicalMemoryGridLayer<C, MD> {
-    pub fn borrow_mem_mut(&mut self) -> &mut Vec<C> { &mut self.data.memory }
+    pub fn borrow_mem_mut(&mut self) -> &mut Vec<C> { &mut self.0.data.memory }
     pub fn borrow_mem(&self) -> &Vec<C> { &self.data.memory }
 }
 
@@ -52,11 +52,13 @@ impl<C: Clone, MD> PhysicalMemoryGrid for PhysicalMemoryGridLayer<C, MD> {
 
 
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<()>> {
-        (0..self.metadata.size as i64).map(|x|
-            (0..self.metadata.size as i64).map(|y|
-                (0..self.metadata.size as i64).map(|z|
+        let start_tlc = self.metadata.start_tlc.0;
+        let size = self.metadata.size;
+        (0..size as i64).map(|x|
+            (0..size as i64).map(move |y|
+                (0..size as i64).map(move |z|
                     ChunkLoadQueueItem {
-                        pos: TLCPos(self.metadata.start_tlc.0 + Vector3 { x, y, z }),
+                        pos: TLCPos(start_tlc + Vector3 { x, y, z }),
                         data: (),
                     }
                 )
@@ -65,7 +67,7 @@ impl<C: Clone, MD> PhysicalMemoryGrid for PhysicalMemoryGridLayer<C, MD> {
     }
 
     fn shift(&mut self, shift: TLCVector<i32>, load_in_from_edge: TLCVector<i32>, load_buffer: [bool; 3]) -> Vec<ChunkLoadQueueItem<()>> {
-        self.metadata.offsets = TLCVector(
+        self.0.metadata.offsets = TLCVector(
             amod(self.metadata.offsets.0.cast::<i64>().unwrap() + shift.0.cast::<i64>().unwrap(), self.size())
         );
 
@@ -163,7 +165,7 @@ impl<PC: Clone, VC: Clone + From<PC>, MD> ToVirtual<MemoryGridLayerChunkData<VC>
     fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridLayer<VC, MD> {
         let vgrid_size = grid_size - 1;
         let mut vgrid = vec![None; (vgrid_size).pow(3)];
-        let mut data = self.0.data;
+        let data = self.0.data;
         let metadata = self.0.metadata;
 
         for ((chunk_i, loaded), chunk_data) in metadata.chunks_loaded
@@ -198,7 +200,7 @@ impl <PC: Clone, VC: Into<PC> + Clone, MD> FromVirtual<MemoryGridLayerChunkData<
     ) -> Self {
         let phys_grid_size = vgrid_size + 1;
         let mut grid = vec![None; (vgrid_size).pow(3)];
-        let mut data = virtual_grid.chunks;
+        let data = virtual_grid.chunks;
         let metadata = virtual_grid.metadata;
 
         for (chunk_i, chunk_data) in data.into_iter().enumerate() {
