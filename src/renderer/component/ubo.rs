@@ -1,9 +1,6 @@
-use crate::renderer::component::{DataComponent, DataComponentSet};
+use crate::renderer::component::{DataComponent, DataComponentWrapper};
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
-use vulkano::command_buffer::allocator::CommandBufferAllocator;
-use vulkano::command_buffer::AutoCommandBufferBuilder;
-use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithFullCopy};
 
@@ -33,16 +30,8 @@ impl RendererUBO {
     }
 }
 
-impl DataComponentSet for RendererUBO {
-    fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
-        todo!()
-    }
-
-    fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        todo!()
-    }
-
-    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        todo!()
-    }
+impl DataComponentWrapper for RendererUBO {
+    type B = DualBufferWithFullCopy<Ubo>;
+    fn comp(&self) -> &DataComponent<Self::B> { &self.comp }
+    fn comp_mut(&mut self) -> &mut DataComponent<Self::B> { &mut self.comp }
 }

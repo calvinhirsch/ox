@@ -37,7 +37,7 @@ impl<CBA: CommandBufferAllocator + 'static> TransferManager<CBA> {
                 CommandBufferInheritanceInfo::default(),
             ).unwrap();
 
-            component_set.record_repeated_transfer(&mut builder);
+            component_set.record_repeated_buffer_transfer(&mut builder);
 
             builder.build().unwrap()
         };
@@ -79,7 +79,7 @@ impl<CBA: CommandBufferAllocator + 'static> TransferManager<CBA> {
 
             builder.execute_commands(Arc::clone(&self.always_transfer_command_buffer)).unwrap();
 
-            component_set.record_transfer_jit(&mut builder);
+            component_set.record_buffer_transfer_jit(&mut builder);
 
             builder.build().unwrap()
         };

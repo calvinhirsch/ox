@@ -12,12 +12,12 @@ pub mod materials;
 pub trait DataComponentSet {
     fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>);
 
-    fn record_repeated_transfer<L, A: CommandBufferAllocator>(
+    fn record_repeated_buffer_transfer<L, A: CommandBufferAllocator>(
         &self,
         builder: &mut AutoCommandBufferBuilder<L, A>,
     );
 
-    fn record_transfer_jit<L, A: CommandBufferAllocator>(
+    fn record_buffer_transfer_jit<L, A: CommandBufferAllocator>(
         &mut self,
         builder: &mut AutoCommandBufferBuilder<L, A>,
     );
@@ -47,11 +47,11 @@ impl<B: BufferScheme, W: DataComponentWrapper<B = B>> DataComponentSet for W {
         self.comp().buffer_scheme.bind(descriptor_writes, self.comp().binding);
     }
 
-    fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+    fn record_repeated_buffer_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
         self.comp().buffer_scheme.record_repeated_transfer(builder);
     }
 
-    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+    fn record_buffer_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
         self.comp_mut().buffer_scheme.record_transfer_jit(builder);
     }
 }

@@ -4,7 +4,7 @@ use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
-use crate::renderer::component::DataComponent;
+use crate::renderer::component::{DataComponent, DataComponentWrapper};
 
 
 #[derive(BufferContents, Debug, Clone, Copy)]
@@ -45,7 +45,7 @@ pub struct MaterialList {
 
 impl MaterialList {
     pub fn new<L, A: CommandBufferAllocator>(
-        materials: &Vec<Material>,
+        materials: &[Material],
         memory_allocator: Arc<dyn MemoryAllocator>,
         binding: u32,
         one_time_transfer_builder: &mut AutoCommandBufferBuilder<L, A>,
@@ -58,4 +58,12 @@ impl MaterialList {
             }
         }
     }
+}
+
+impl DataComponentWrapper for MaterialList {
+    type B = ConstantDeviceLocalBuffer<[Material]>;
+
+    fn comp(&self) -> &DataComponent<Self::B> { &self.comp }
+
+    fn comp_mut(&mut self) -> &mut DataComponent<Self::B> { &mut self.comp }
 }

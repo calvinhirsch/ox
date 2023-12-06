@@ -1,7 +1,10 @@
-TODO rust:
- - Fix: some rendering layers might have only a bitmask
+TO-DO rust:
+ - Macros for
+    - Deriving DataComponentWrapper
+    - Deriving DataComponentSet if all struct members are DataComponentWrapper or DataComponent (?)
+    - Defining custom physical memory grid / virtual memory grid when members are all also grids
 
-TODO shader:
+TO-DO shader:
  - Fix infinite loop while tracing ray. Happens at lvl 0 iteration 0 after 2-3 bounces
  - Experiment with loading material and doing ray bounce inside the inner loop
 

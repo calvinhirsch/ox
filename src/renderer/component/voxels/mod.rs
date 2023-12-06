@@ -38,15 +38,15 @@ impl DataComponentSet for VoxelData {
         }
     }
 
-    fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+    fn record_repeated_buffer_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
         for lod in self.lods.iter().flatten().flatten() {
-            lod.record_repeated_transfer(builder);
+            lod.record_repeated_buffer_transfer(builder);
         }
     }
 
-    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+    fn record_buffer_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
         for lod in self.lods.iter_mut().flatten().flatten() {
-            lod.record_transfer_jit(builder);
+            lod.record_buffer_transfer_jit(builder);
         }
     }
 }

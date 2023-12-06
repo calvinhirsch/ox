@@ -5,7 +5,7 @@ use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy};
 use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithDynamicCopyRegions};
+use crate::renderer::buffers::{BufferScheme, dual::{DualBuffer, DualBufferWithDynamicCopyRegions}};
 
 pub struct VoxelLODUpdate<'a> {
     pub bitmask: &'a Vec<VoxelBitmask>,
@@ -51,14 +51,23 @@ impl RendererVoxelLOD {
 
 impl DataComponentSet for RendererVoxelLOD {
     fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
-        todo!()
+        self.bitmask_buffers.bind(descriptor_writes);
+        if let Some(comp) = &self.voxel_type_id_buffers {
+            comp.bind(descriptor_writes);
+        }
     }
 
-    fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        todo!()
+    fn record_repeated_buffer_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+        self.bitmask_buffers.buffer_scheme.record_repeated_transfer(builder);
+        if let Some(comp) = &self.voxel_type_id_buffers {
+            comp.buffer_scheme.record_repeated_transfer(builder);
+        }
     }
 
-    fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        todo!()
+    fn record_buffer_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+        self.bitmask_buffers.buffer_scheme.record_transfer_jit(builder);
+        if let Some(comp) = &mut self.voxel_type_id_buffers {
+            comp.buffer_scheme.record_transfer_jit(builder);
+        }
     }
 }

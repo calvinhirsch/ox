@@ -4,7 +4,7 @@ use vulkano::buffer::BufferContents;
 #[derive(BufferContents, Debug, Clone, Copy)]
 #[repr(C)]
 pub struct VoxelTypeIDs {
-    pub indices: [u8; 128 / 8], // TODO: Make this generic somehow so you can use u16 or u32
+    pub indices: [u8; 128 / 8], // ENHANCEMENT: Make this generic somehow so you can use u16 or u32
 }
 impl VoxelTypeIDs {
     pub const BITS_PER_VOXEL: usize = 1;

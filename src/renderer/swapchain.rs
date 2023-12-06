@@ -23,6 +23,8 @@ pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBuff
     pub command_buffer_allocator: CBA,
 }
 
+pub type GpuFence = FenceSignalFuture<Box<dyn GpuFuture>>;
+
 pub struct SwapchainPipeline<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static> {
     params: SwapchainPipelineParams<DSA, CBA>,
     images: Vec<Arc<Image>>,
@@ -31,35 +33,12 @@ pub struct SwapchainPipeline<DSA: DescriptorSetAllocator + 'static, CBA: Command
     pipeline: ComputeRenderPipeline<CBA>,
 
     recreate: bool,
-    compute_fence: Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>,
-    present_fences: Vec<Option<Arc<FenceSignalFuture<Box<dyn GpuFuture>>>>>,
+    compute_fence: Option<Arc<GpuFence>>,
+    present_fences: Vec<Option<Arc<GpuFence>>>,
     prev_fence_i: u32,
 }
 
 impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static> SwapchainPipeline<DSA, CBA> {
-    fn new_pipeline(
-        images: Vec<Arc<Image>>,
-        device: Arc<Device>,
-        queue: Arc<Queue>,
-        dimensions: PhysicalSize<u32>,
-        component_set: &impl DataComponentSet,
-        params: SwapchainPipelineParams<DSA, CBA>,
-    ) -> ComputeRenderPipeline<CBA> {
-        ComputeRenderPipeline::new(
-            params.subgroup_width,
-            params.subgroup_height,
-            device,
-            Arc::clone(&params.shader),
-            queue,
-            images.as_slice(),
-            params.image_binding,
-            &params.descriptor_set_allocator,
-            &params.command_buffer_allocator,
-            &dimensions,
-            component_set,
-        )
-    }
-
     pub fn new(
         device: Arc<Device>,
         compute_queue: Arc<Queue>,
@@ -129,12 +108,12 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
         dimensions: &PhysicalSize<u32>,
         component_set: &impl DataComponentSet,
     ) {
-        self.recreate_with_dims(dimensions.clone());
+        self.recreate_with_dims(*dimensions);
         self.pipeline.recreate(
             &self.images,
             &self.params.descriptor_set_allocator,
             &self.params.command_buffer_allocator,
-            &dimensions,
+            dimensions,
             component_set,
         );
     }
@@ -201,7 +180,7 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
         };
 
         let curr_future = previous_future
-            .join(Arc::clone(&transfer_fence))
+            .join(Arc::clone(transfer_fence))
             .join(acquire_future);
 
         let compute_future =
