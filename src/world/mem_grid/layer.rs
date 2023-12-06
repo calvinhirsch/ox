@@ -29,18 +29,20 @@ pub type VirtualMemoryGridLayer<C, MD> =
 
 #[derive(Clone, new)]
 pub struct MemoryGridLayerData<C: Clone> {
-    memory: Vec<C>
+    chunks: Vec<C>,
+    chunks_loaded: Vec<bool>,
 }
 
 #[derive(new, Clone)]  // Clone is not really necessary, just easier for initializing vecs with None
 pub struct MemoryGridLayerChunkData<C: Clone> {
     data: C,
+    loaded: bool,
 }
 
 
 impl<C: Clone, MD> PhysicalMemoryGridLayer<C, MD> {
-    pub fn borrow_mem_mut(&mut self) -> &mut Vec<C> { &mut self.0.data.memory }
-    pub fn borrow_mem(&self) -> &Vec<C> { &self.data.memory }
+    pub fn borrow_mem_mut(&mut self) -> &mut Vec<C> { &mut self.0.data.chunks }
+    pub fn borrow_mem(&self) -> &Vec<C> { &self.data.chunks }
 }
 
 impl<C: Clone, MD> PhysicalMemoryGrid for PhysicalMemoryGridLayer<C, MD> {
@@ -165,7 +167,7 @@ impl<PC: Clone, VC: Clone + From<PC>, MD> ToVirtual<MemoryGridLayerChunkData<VC>
         let data = self.0.data;
         let metadata = self.0.metadata;
 
-        for (chunk_i, chunk_data) in data.memory.into_iter().enumerate() {
+        for (chunk_i, (chunk_data, loaded)) in data.chunks.into_iter().zip(data.chunks_loaded.iter()).enumerate() {
             // If this layer is smaller than full grid, add padding to virtual position so it
             // is centered
             let virtual_pos = metadata
@@ -177,6 +179,7 @@ impl<PC: Clone, VC: Clone + From<PC>, MD> ToVirtual<MemoryGridLayerChunkData<VC>
             vgrid[pos_index(virtual_pos, vgrid_size)] = Some(
                 MemoryGridLayerChunkData::<VC>::new(
                     chunk_data.into(),
+                    *loaded,
                 )
             );
         }
@@ -194,7 +197,8 @@ impl <PC: Clone, VC: Into<PC> + Clone, MD> FromVirtual<MemoryGridLayerChunkData<
         vgrid_size: usize
     ) -> Self {
         let phys_grid_size = vgrid_size + 1;
-        let mut grid = vec![None; (vgrid_size).pow(3)];
+        let mut grid = vec![None; vgrid_size.pow(3)];
+        let mut chunks_loaded = vec![false; vgrid_size.pow(3)];
         let data = virtual_grid.chunks;
         let metadata = virtual_grid.metadata;
 
@@ -207,7 +211,9 @@ impl <PC: Clone, VC: Into<PC> + Clone, MD> FromVirtual<MemoryGridLayerChunkData<
                         vgrid_size,
                     ).0;
 
-                    grid[pos_index(phys_pos, phys_grid_size)] = Some(data.data.into());
+                    let idx = pos_index(phys_pos, phys_grid_size);
+                    chunks_loaded[idx] = data.loaded;
+                    grid[idx] = Some(data.data.into());
                 }
             }
         }
@@ -215,7 +221,8 @@ impl <PC: Clone, VC: Into<PC> + Clone, MD> FromVirtual<MemoryGridLayerChunkData<
         Self(
             PhysicalMemoryGridStruct::new(
                 MemoryGridLayerData {
-                    memory: grid.into_iter().map(|x| x.unwrap()).collect(),
+                    chunks: grid.into_iter().map(|x| x.unwrap()).collect(),
+                    chunks_loaded,
                 },
                 MemoryGridLayerMetadata { size: phys_grid_size, ..metadata },
             )

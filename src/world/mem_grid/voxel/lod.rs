@@ -90,18 +90,18 @@ impl VoxelLOD {
                         bitmask_layer: PhysicalMemoryGridLayer::new(
                             PhysicalMemoryGridStruct {
                                 metadata: common_layer_meta.clone(),
-                                data: MemoryGridLayerData::new(bitmask),
+                                data: MemoryGridLayerData::new(bitmask, vec![false; cubed(params.size)]),
                             }
                         ),
                         voxel_type_id_layer: voxel_ids.map(|vids| PhysicalMemoryGridLayer::new(
                                 PhysicalMemoryGridStruct {
-                                    data: MemoryGridLayerData::new(vids),
+                                    data: MemoryGridLayerData::new(vids, vec![false; cubed(params.size)]),
                                     metadata: common_layer_meta.clone(),
                                 }
                             )),
                         updated_bitmask_regions_layer: PhysicalMemoryGridLayer::new(
                             PhysicalMemoryGridStruct {
-                                data: MemoryGridLayerData::new(vec![]),
+                                data: MemoryGridLayerData::new(vec![vec![]; cubed(params.size)], vec![false; cubed(params.size)]),
                                 metadata: common_layer_meta,
                             }
                         )

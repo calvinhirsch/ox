@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::mpsc::{Receiver, sync_channel};
-use std::{thread};
+use std::{mem, thread};
 use std::hash::{Hash, Hasher};
 use cgmath::{Array, Vector3};
 use crate::world::mem_grid::utils::pos_index;
@@ -32,6 +32,7 @@ impl<D> Eq for ChunkLoadQueueItem<D> {
 
 pub trait LoadChunk<QI> {
     fn load_new(&mut self, chunk: ChunkLoadQueueItem<QI>) -> Self;
+    fn unloaded() -> Self;
 }
 
 
@@ -89,7 +90,7 @@ impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
             let grid_index = ChunkLoader::grid_index(start_tlc, grid, qi.pos)
                 .expect("A chunk was queued for loading that is not in bounds of current grid.");
 
-            let chunk = grid.chunks[grid_index].take();
+            let chunk = mem::replace(&mut grid.chunks[grid_index], Some(C::unloaded()));
 
             thread::spawn(move || {
                 sender.send((qi.pos, chunk.unwrap().load_new(qi))).unwrap();
