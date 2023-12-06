@@ -30,7 +30,7 @@ impl<T: BufferContents> BufferScheme for DualBufferWithDynamicCopyRegions<T> {
     fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, _: &mut AutoCommandBufferBuilder<L, A>) {}
 
     fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        let copy_regions = mem::replace(&mut self.copy_regions, vec![]);
+        let copy_regions = mem::take(&mut self.copy_regions);
         builder.copy_buffer(
             CopyBufferInfo {
                 regions: SmallVec::from(copy_regions),

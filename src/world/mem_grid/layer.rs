@@ -1,4 +1,4 @@
-use crate::world::mem_grid::utils::{amod, cubed, pos_for_index, pos_index};
+use crate::world::mem_grid::utils::{amod, pos_for_index, pos_index};
 use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector};
 use cgmath::{Array, EuclideanSpace, Vector3, Point3};
@@ -14,8 +14,7 @@ pub struct MemoryGridLayerMetadata<E> {
     tlc_size: usize,
     start_tlc: TLCPos<i64>,
     offsets: TLCVector<usize>,
-    chunks_loaded: Vec<bool>,
-    extra: E,
+    pub extra: E,
 }
 impl<E> MemoryGridMetadata for MemoryGridLayerMetadata<E> {
     fn size(&self) -> usize { self.size }
@@ -36,7 +35,6 @@ pub struct MemoryGridLayerData<C: Clone> {
 #[derive(new, Clone)]  // Clone is not really necessary, just easier for initializing vecs with None
 pub struct MemoryGridLayerChunkData<C: Clone> {
     data: C,
-    loaded: bool,  // TODO: remove? redundant with metadata
 }
 
 
@@ -54,16 +52,16 @@ impl<C: Clone, MD> PhysicalMemoryGrid for PhysicalMemoryGridLayer<C, MD> {
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<()>> {
         let start_tlc = self.metadata.start_tlc.0;
         let size = self.metadata.size;
-        (0..size as i64).map(|x|
-            (0..size as i64).map(move |y|
+        (0..size as i64).flat_map(|x|
+            (0..size as i64).flat_map(move |y|
                 (0..size as i64).map(move |z|
                     ChunkLoadQueueItem {
                         pos: TLCPos(start_tlc + Vector3 { x, y, z }),
                         data: (),
                     }
                 )
-            ).flatten()
-        ).flatten().collect()
+            )
+        ).collect()
     }
 
     fn shift(&mut self, shift: TLCVector<i32>, load_in_from_edge: TLCVector<i32>, load_buffer: [bool; 3]) -> Vec<ChunkLoadQueueItem<()>> {
@@ -155,7 +153,6 @@ impl<E: Sized> MemoryGridLayerMetadata<E> {
             start_tlc,
             tlc_size,
             offsets: TLCVector(Self::calc_offsets(start_tlc, size)),
-            chunks_loaded: vec![false; cubed(size)],
             extra,
         }
     }
@@ -168,8 +165,7 @@ impl<PC: Clone, VC: Clone + From<PC>, MD> ToVirtual<MemoryGridLayerChunkData<VC>
         let data = self.0.data;
         let metadata = self.0.metadata;
 
-        for ((chunk_i, loaded), chunk_data) in metadata.chunks_loaded
-            .iter().enumerate().zip(data.memory.into_iter()) {
+        for (chunk_i, chunk_data) in data.memory.into_iter().enumerate() {
             // If this layer is smaller than full grid, add padding to virtual position so it
             // is centered
             let virtual_pos = metadata
@@ -181,7 +177,6 @@ impl<PC: Clone, VC: Clone + From<PC>, MD> ToVirtual<MemoryGridLayerChunkData<VC>
             vgrid[pos_index(virtual_pos, vgrid_size)] = Some(
                 MemoryGridLayerChunkData::<VC>::new(
                     chunk_data.into(),
-                    *loaded
                 )
             );
         }

@@ -69,9 +69,9 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
         tlc_load_dist_thresh: u32,
     ) -> World<PMG, PMG, C, VMD> {
         World {
-            physical_type: PhantomData::default(),
-            chunk_data_type: PhantomData::default(),
-            virtual_grid_metadata: PhantomData::default(),
+            physical_type: PhantomData,
+            chunk_data_type: PhantomData,
+            virtual_grid_metadata: PhantomData,
             mem_grid,
             chunk_loader,
             camera,
@@ -122,7 +122,7 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
         // For each axis, set self.metadata.buffer_chunk_states, load_buffer, and load_in_from_edge
         let mut load_buffer: [bool; 3] = [false; 3];
         let mut load_in_from_edge = TLCVector(Vector3 { x: 0, y: 0, z: 0 });
-        for a in vec![0, 1, 2] {
+        for a in [0, 1, 2] {
             let within_upper_load_thresh = pt_gr(
                 center_chunk_cam_pos - Vector3::from_value(self.metadata.tlc_size as f32),
                 self.metadata.tlc_load_dist_thresh as f32

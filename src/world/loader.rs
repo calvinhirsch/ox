@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::mpsc::{Receiver, sync_channel};
-use std::{mem, thread};
+use std::{thread};
 use std::hash::{Hash, Hasher};
 use cgmath::{Array, Vector3};
 use crate::world::mem_grid::utils::pos_index;
@@ -40,11 +40,13 @@ pub struct ChunkLoader<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> {
     queue: VecDeque<Receiver<(TLCPos<i64>, C)>>
 }
 
-impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
-    pub fn new() -> Self {
-        ChunkLoader { queue_item_data_type: PhantomData::default(), queue: VecDeque::new() }
+impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> Default for ChunkLoader<QI, C> {
+    fn default() -> Self {
+        ChunkLoader { queue_item_data_type: PhantomData, queue: VecDeque::new() }
     }
+}
 
+impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
     fn grid_index<_MD: MemoryGridMetadata>(
         start_tlc: TLCPos<i64>,
         grid: &mut VirtualMemoryGridStruct<C, _MD>,
@@ -73,13 +75,11 @@ impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
     ) {
         // Receive chunks that have finished loading and put them in "chunks"
         for receiver in self.queue.iter_mut() {
-            receiver.try_recv().and_then(|(pos, chunk_data)| {
-                match ChunkLoader::grid_index(start_tlc, grid, pos) {
-                    None => {},
-                    Some(index) => { grid.chunks[index] = Some(chunk_data); }
+            if let Ok((pos, chunk_data)) = receiver.try_recv() {
+                if let Some(index) = ChunkLoader::grid_index(start_tlc, grid, pos) {
+                    grid.chunks[index] = Some(chunk_data)
                 }
-                Ok(())
-            }).unwrap();
+            }
         }
 
         // Enqueue new chunks for loading
@@ -89,7 +89,7 @@ impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
             let grid_index = ChunkLoader::grid_index(start_tlc, grid, qi.pos)
                 .expect("A chunk was queued for loading that is not in bounds of current grid.");
 
-            let chunk = mem::replace(&mut grid.chunks[grid_index], None);
+            let chunk = grid.chunks[grid_index].take();
 
             thread::spawn(move || {
                 sender.send((qi.pos, chunk.unwrap().load_new(qi))).unwrap();

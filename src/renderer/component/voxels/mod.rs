@@ -33,26 +33,20 @@ impl VoxelData {
 
 impl DataComponentSet for VoxelData {
     fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
-        for lod_o in self.lods.iter().flatten() {
-            if let Some(lod) = lod_o {
-                lod.bind(descriptor_writes);
-            }
+        for lod in self.lods.iter().flatten().flatten() {
+            lod.bind(descriptor_writes);
         }
     }
 
     fn record_repeated_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        for lod_o in self.lods.iter().flatten() {
-            if let Some(lod) = lod_o {
-                lod.record_repeated_transfer(builder);
-            }
+        for lod in self.lods.iter().flatten().flatten() {
+            lod.record_repeated_transfer(builder);
         }
     }
 
     fn record_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
-        for lod_o in self.lods.iter_mut().flatten() {
-            if let Some(ref mut lod) = lod_o {
-                lod.record_transfer_jit(builder);
-            }
+        for lod in self.lods.iter_mut().flatten().flatten() {
+            lod.record_transfer_jit(builder);
         }
     }
 }

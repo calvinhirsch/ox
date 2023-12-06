@@ -9,9 +9,9 @@ impl From<Vec<VoxelTypeIDs>> for ChunkVoxelIDs {
         ChunkVoxelIDs(value)
     }
 }
-impl Into<Vec<VoxelTypeIDs>> for ChunkVoxelIDs {
-    fn into(self) -> Vec<VoxelTypeIDs> {
-        self.0
+impl From<ChunkVoxelIDs> for Vec<VoxelTypeIDs> {
+    fn from(value: ChunkVoxelIDs) -> Self {
+        value.0
     }
 }
 impl Index<usize> for ChunkVoxelIDs {
@@ -34,9 +34,9 @@ impl From<Vec<VoxelBitmask>> for ChunkBitmask {
         ChunkBitmask(value)
     }
 }
-impl Into<Vec<VoxelBitmask>> for ChunkBitmask {
-    fn into(self) -> Vec<VoxelBitmask> {
-        self.0
+impl From<ChunkBitmask> for Vec<VoxelBitmask> {
+    fn from(value: ChunkBitmask) -> Self {
+        value.0
     }
 }
 impl ChunkBitmask {

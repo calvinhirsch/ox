@@ -31,13 +31,10 @@ impl RendererVoxelLOD {
                 buffer_scheme: DualBuffer::from_iter(bitmask_iter, Arc::clone(&memory_allocator), false).with_copy_regions(),
                 binding: bitmask_binding,
             },
-            voxel_type_id_buffers: match voxel_id_iter {
-                None => None,
-                Some(iter) => Some(DataComponent {
+            voxel_type_id_buffers: voxel_id_iter.map(|iter| DataComponent {
                     buffer_scheme: DualBuffer::from_iter(iter, memory_allocator, false).with_copy_regions(),
                     binding: voxel_id_binding.unwrap(),
                 }),
-            },
         }
     }
 

@@ -117,21 +117,12 @@ impl VoxelLOD {
         )
     }
 
-    pub fn new_raw(data: VoxelLODData, metadata: VoxelLODMetadata) -> Self {
-        Self(
-            PhysicalMemoryGridStruct {
-                data,
-                metadata,
-            }
-        )
-    }
-
     /// Aggregate the values from updated_bitmask_regions_layer into absolute regions in the
     /// bitmask buffer, generate regions for updating the voxel type ID buffer, and reset these
     /// tracked regions if clear_regions=true.
     pub fn aggregate_updates(&mut self, clear_regions: bool) -> Vec<VoxelLODUpdate> {
         let mut updates = vec![];
-        let has_voxel_ids = !self.data.voxel_type_id_layer.is_none();
+        let has_voxel_ids = self.data.voxel_type_id_layer.is_some();
         let voxels_per_tlc = self.metadata.voxels_per_tlc;
         let n_chunks = cubed(self.0.metadata.size);
 
@@ -144,7 +135,7 @@ impl VoxelLOD {
             .zip(match self.0.data.voxel_type_id_layer {
                 None => (0..n_chunks).map(|_| None).collect::<Vec<_>>(),
                 Some(ref layer) =>
-                    layer.borrow_mem().iter().map(|x| Some(x)).collect::<Vec<_>>(),
+                    layer.borrow_mem().iter().map(Some).collect::<Vec<_>>(),
             })
             .enumerate()
         {
@@ -209,9 +200,8 @@ impl PhysicalMemoryGrid for VoxelLOD {
 
     fn shift(&mut self, shift: TLCVector<i32>, load_in_from_edge: TLCVector<i32>, load_buffer: [bool; 3]) -> Vec<ChunkLoadQueueItem<()>> {
         // Because all three of these queues will be the same size, only need to track one.
-        self.0.data.voxel_type_id_layer.as_mut().and_then(
-            |layer|
-                Some(layer.shift(shift, load_in_from_edge, load_buffer))
+        self.0.data.voxel_type_id_layer.as_mut().map(
+            |layer| layer.shift(shift, load_in_from_edge, load_buffer)
         );
         self.0.data.updated_bitmask_regions_layer.shift(shift, load_in_from_edge, load_buffer);
         self.0.data.bitmask_layer.shift(shift, load_in_from_edge, load_buffer)
@@ -246,8 +236,8 @@ impl ToVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
         VirtualMemoryGridStruct::new(
             bitmask_chunks
                 .into_iter()
-                .zip(voxel_id_chunks.unwrap_or(vec![None; chunk_regions.len()]).into_iter())
-                .zip(chunk_regions.into_iter())
+                .zip(voxel_id_chunks.unwrap_or(vec![None; chunk_regions.len()]))
+                .zip(chunk_regions)
                 .map(
                     |(
                          (
@@ -256,14 +246,11 @@ impl ToVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
                          ),
                          updated_bitmask_regions
                      )|
-                        match bitmask {
-                            None => None,
-                            Some(bm) => Some(VoxelLODChunkData {
+                        bitmask.map(|bm| VoxelLODChunkData {
                                 bitmask: bm,
                                 voxel_type_ids,
                                 updated_bitmask_regions: updated_bitmask_regions.unwrap(),
-                            }),
-                        }
+                            })
                 )
                 .collect(),
             VirtualVoxelLODMetadata {
@@ -298,18 +285,14 @@ impl FromVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
                         ),
                         grid_size,
                     ),
-                    voxel_type_id_layer: match metadata.voxel_type_ids {
-                        None => None,
-                        Some(m) => Some(
-                            PhysicalMemoryGridLayer::from_virtual_for_size(
+                    voxel_type_id_layer: metadata.voxel_type_ids.map(|m|
+                        PhysicalMemoryGridLayer::from_virtual_for_size(
                                 VirtualMemoryGridStruct::new(
                                     voxel_id_grid,
                                     m,
                                 ),
                                 grid_size,
-                            )
-                        )
-                    },
+                            )),
                     updated_bitmask_regions_layer: PhysicalMemoryGridLayer::from_virtual_for_size(
                         VirtualMemoryGridStruct::new(
                             update_grid,

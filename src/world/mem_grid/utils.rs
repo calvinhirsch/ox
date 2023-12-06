@@ -16,9 +16,9 @@ pub fn amod(n: Vector3<i64>, d: usize) -> Vector3<usize> {
 }
 
 pub const fn pos_for_index(index: usize, size: usize) -> Vector3<usize> {
-    return Vector3 {
+    Vector3 {
         x: index % size,
         y: index / (size * size),
         z: (index % (size * size)) / size,
-    };
+    }
 }
