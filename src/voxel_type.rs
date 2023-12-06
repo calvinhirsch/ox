@@ -1,6 +1,6 @@
 use enum_iterator::{all, Sequence};
 use num_traits::{FromPrimitive, ToPrimitive};
-use crate::renderer::component::materials::Material;
+pub use crate::renderer::component::materials::Material;
 
 
 pub struct VoxelTypeDefinition<A> {

@@ -38,6 +38,7 @@ impl MemoryGridMetadata for VirtualVoxelMemoryGridMetadata {
     fn size(&self) -> usize { self.this.size }
 }
 
+#[derive(Clone)]
 pub struct VoxelMemoryGridChunkData {
     lods: Vec<Vec<Option<VoxelLODChunkData>>>,
 }
