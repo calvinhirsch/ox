@@ -14,6 +14,7 @@ use vulkano::sync::future::{FenceSignalFuture};
 use vulkano::sync::GpuFuture;
 use winit::dpi::PhysicalSize;
 
+
 pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {
     pub subgroup_width: u32,
     pub subgroup_height: u32,

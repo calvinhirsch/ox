@@ -1,12 +1,13 @@
-use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::{mem, thread};
 use std::hash::{Hash, Hasher};
-use cgmath::{Array, Vector3};
-use crate::world::mem_grid::utils::pos_index;
-use crate::world::mem_grid::{MemoryGridMetadata, VirtualMemoryGridStruct};
+use cgmath::{Array, MetricSpace, Vector3};
+use priority_queue::PriorityQueue;
+use thread_priority::{ThreadBuilderExt, ThreadPriority};
+use crate::world::mem_grid::utils::{index_for_pos};
+use crate::world::mem_grid::{MemoryGridMetadata, Placeholder, VirtualMemoryGridStruct};
 use crate::world::TLCPos;
+
 
 
 pub struct ChunkLoadQueueItem<D> {
@@ -23,31 +24,33 @@ impl<D> PartialEq<Self> for ChunkLoadQueueItem<D> {
         self.pos.0.eq(&other.pos.0)
     }
 }
+impl<D> Eq for ChunkLoadQueueItem<D> {}
 
 
-impl<D> Eq for ChunkLoadQueueItem<D> {
-
+pub trait LoadChunk<QI>: Placeholder {
+    fn load_new(&mut self, chunk: ChunkLoadQueueItem<QI>);
 }
 
 
-pub trait LoadChunk<QI> {
-    fn load_new(&mut self, chunk: ChunkLoadQueueItem<QI>) -> Self;
-    fn unloaded() -> Self;
+pub struct ChunkLoader<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> {
+    active_threads: Vec<Option<Receiver<(TLCPos<i64>, C)>>>,
+    highest_thread_idx: usize,
+    queue: PriorityQueue<ChunkLoadQueueItem<QI>, u8>,
 }
 
-
-pub struct ChunkLoader<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> {
-    queue_item_data_type: PhantomData<QI>,
-    queue: VecDeque<Receiver<(TLCPos<i64>, C)>>
+pub struct ChunkLoaderParams {
+    pub thread_capacity: usize,
 }
 
-impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> Default for ChunkLoader<QI, C> {
-    fn default() -> Self {
-        ChunkLoader { queue_item_data_type: PhantomData, queue: VecDeque::new() }
+impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + Clone + 'static> ChunkLoader<QI, C> {
+    pub fn new(params: ChunkLoaderParams) -> Self {
+        ChunkLoader {
+            active_threads: (0..params.thread_capacity).map(|_| None).collect(),
+            highest_thread_idx: 0,
+            queue: PriorityQueue::new(),
+        }
     }
-}
 
-impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
     fn grid_index<_MD: MemoryGridMetadata>(
         start_tlc: TLCPos<i64>,
         grid: &mut VirtualMemoryGridStruct<C, _MD>,
@@ -60,7 +63,7 @@ impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
         }
         else {
             Some(
-                pos_index(
+                index_for_pos(
                     (pos.0 - start_tlc.0).cast::<usize>()?,
                     grid.size()
                 )
@@ -75,28 +78,72 @@ impl<QI: Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
         queue: Vec<ChunkLoadQueueItem<QI>>
     ) {
         // Receive chunks that have finished loading and put them in "chunks"
-        for receiver in self.queue.iter_mut() {
-            if let Ok((pos, chunk_data)) = receiver.try_recv() {
-                if let Some(index) = ChunkLoader::grid_index(start_tlc, grid, pos) {
-                    grid.chunks[index] = Some(chunk_data)
+        let mut prev_active = 0;
+        for (i, thread_slot) in self.active_threads.iter_mut().enumerate() {
+            if if let Some(receiver) = thread_slot {
+                prev_active = i;
+                if let Ok((pos, chunk_data)) = receiver.try_recv() {
+                    if let Some(index) = ChunkLoader::grid_index(start_tlc, grid, pos) {
+                        grid.chunks[index] = Some(chunk_data)
+                    }
+                    true
+                }
+                else { false }
+            }
+            else { false } {
+                // Finished with this thread, set its entry to None and update highest_thread_idx
+                // if this was previously the highest.
+                *thread_slot = None;
+                if self.highest_thread_idx <= i {
+                    self.highest_thread_idx = prev_active;
                 }
             }
+
+            if i >= self.highest_thread_idx { break; }
         }
 
-        // Enqueue new chunks for loading
-        for qi in queue {
-            let (sender, receiver) = sync_channel(0);
+        // Add new items to queue
+        for item in queue {
+            let priority = (99.99 - (Vector3::from_value(grid.size()/2).cast::<f32>().unwrap()
+                .distance((item.pos.0 - start_tlc.0).cast::<f32>().unwrap())) * grid.size() as f32 / 50.) as u8;
+            self.queue.push(
+                item,
+                priority,
+            );
+        }
 
-            let grid_index = ChunkLoader::grid_index(start_tlc, grid, qi.pos)
-                .expect("A chunk was queued for loading that is not in bounds of current grid.");
+        // Enqueue new chunks for loading until queue is empty or there are no thread slots left
+        if !self.queue.is_empty() {
+            for (i, thread_slot) in self.active_threads.iter_mut().enumerate() {
+                if thread_slot.is_none() {
+                    let (item, priority) = self.queue.pop().unwrap();
+                    let (sender, receiver) = sync_channel(0);
 
-            let chunk = mem::replace(&mut grid.chunks[grid_index], Some(C::unloaded()));
+                    let grid_index = ChunkLoader::grid_index(start_tlc, grid, item.pos)
+                        .expect("A chunk was queued for loading that is not in bounds of current grid.");
 
-            thread::spawn(move || {
-                sender.send((qi.pos, chunk.unwrap().load_new(qi))).unwrap();
-            });
+                    // Create a placeholder for this chunk and swap it into the grid so we can edit
+                    // the real one.
+                    let placeholder = grid.chunks[grid_index].as_ref().unwrap().placeholder();
+                    let mut chunk = mem::replace(&mut grid.chunks[grid_index], Some(placeholder)).unwrap();
 
-            self.queue.push_back(receiver);
+                    thread::Builder::new()
+                        .spawn_with_priority(
+                            ThreadPriority::Crossplatform(priority.try_into().unwrap()),
+                            move |result| {
+                                result.expect("Failed to set thread priority.");
+                                let pos = item.pos;
+                                chunk.load_new(item);
+                                sender.send((pos, chunk)).unwrap();
+                            }
+                        ).unwrap();
+
+                    *thread_slot = Some(receiver);
+                    if i > self.highest_thread_idx { self.highest_thread_idx = i; }
+
+                    if self.queue.is_empty() { break; }
+                }
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ pub struct VoxelTypeIDs {
     pub indices: [u8; 128 / 8], // ENHANCEMENT: Make this generic somehow so you can use u16 or u32
 }
 impl VoxelTypeIDs {
-    pub const BITS_PER_VOXEL: usize = 1;
+    pub const BITS_PER_VOXEL: usize = 8;
 
     pub fn new_vec(n_voxels: usize) -> Vec<Self> {
         vec![VoxelTypeIDs { indices: [0; 128 / 8] }; n_voxels * Self::BITS_PER_VOXEL / 128]
@@ -21,7 +21,7 @@ pub struct VoxelBitmask {
 }
 
 impl VoxelBitmask {
-    pub const BITS_PER_VOXEL: usize = 8;
+    pub const BITS_PER_VOXEL: usize = 1;
 
     pub fn new_vec(n_voxels: usize) -> Vec<Self> {
         vec![VoxelBitmask { mask: 0 }; n_voxels * Self::BITS_PER_VOXEL / 128]

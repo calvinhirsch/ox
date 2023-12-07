@@ -1,16 +1,19 @@
+use std::marker::PhantomData;
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use crate::renderer::component::voxels::lod::RendererVoxelLOD;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::world::mem_grid::layer::{MemoryGridLayerChunkData, MemoryGridLayerData, MemoryGridLayerMetadata, PhysicalMemoryGridLayer};
 use crate::world::mem_grid::utils::cubed;
 use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxelIDs};
-use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, Placeholder, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector};
 use std::sync::Arc;
 use derive_more::Deref;
+use hashbrown::HashMap;
 use itertools::Itertools;
 use vulkano::command_buffer::BufferCopy;
 use vulkano::memory::allocator::MemoryAllocator;
+use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::ChunkLoadQueueItem;
 
 
@@ -21,10 +24,11 @@ pub struct VoxelLODCreateParams {
 }
 
 #[derive(Deref)]
-pub struct VoxelLOD(PhysicalMemoryGridStruct<VoxelLODData, VoxelLODMetadata>);
-pub type VirtualVoxelLOD = VirtualMemoryGridStruct<VoxelLODChunkData, VirtualVoxelLODMetadata>;
+pub struct VoxelLOD<VE: VoxelTypeEnum>(PhysicalMemoryGridStruct<VoxelLODData<VE>, VoxelLODMetadata>);
+pub type VirtualVoxelLOD<VE> = VirtualMemoryGridStruct<VoxelLODChunkData<VE>, VirtualVoxelLODMetadata>;
 
-pub struct VoxelLODData {
+pub struct VoxelLODData<VE: VoxelTypeEnum> {
+    voxel_type_enum: PhantomData<VE>,
     bitmask_layer: PhysicalMemoryGridLayer<Vec<VoxelBitmask>, ()>,
     voxel_type_id_layer: Option<PhysicalMemoryGridLayer<Vec<VoxelTypeIDs>, ()>>,
     updated_bitmask_regions_layer: PhysicalMemoryGridLayer<Vec<BufferCopy>, ()>,
@@ -51,14 +55,15 @@ impl MemoryGridMetadata for VirtualVoxelLODMetadata {
 }
 
 #[derive(Clone)]
-pub struct VoxelLODChunkData {
+pub struct VoxelLODChunkData<VE: VoxelTypeEnum> {
+    voxel_type_enum: PhantomData<VE>,
     pub bitmask: MemoryGridLayerChunkData<ChunkBitmask>,
     pub voxel_type_ids: Option<MemoryGridLayerChunkData<ChunkVoxelIDs>>,
     pub updated_bitmask_regions: MemoryGridLayerChunkData<Vec<BufferCopy>>,
 }
 
 
-impl VoxelLOD {
+impl<VE: VoxelTypeEnum> VoxelLOD<VE> {
     pub fn new(
         params: VoxelLODCreateParams,
         voxels_per_tlc: usize,
@@ -87,6 +92,7 @@ impl VoxelLOD {
             VoxelLOD(
                 PhysicalMemoryGridStruct::new(
                     VoxelLODData {
+                        voxel_type_enum: PhantomData,
                         bitmask_layer: PhysicalMemoryGridLayer::new(
                             PhysicalMemoryGridStruct {
                                 metadata: common_layer_meta.clone(),
@@ -188,8 +194,9 @@ impl VoxelLOD {
     }
 }
 
-impl PhysicalMemoryGrid for VoxelLOD {
-    type Data = VoxelLODData;
+
+impl<VE: VoxelTypeEnum> PhysicalMemoryGrid for VoxelLOD<VE> {
+    type Data = VoxelLODData<VE>;
     type Metadata = VoxelLODMetadata;
     type ChunkLoadQueueItemData = ();
 
@@ -209,8 +216,8 @@ impl PhysicalMemoryGrid for VoxelLOD {
 }
 
 
-impl ToVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
-    fn to_virtual_for_size(self, grid_size: usize) -> VirtualVoxelLOD {
+impl<VE: VoxelTypeEnum> ToVirtual<VoxelLODChunkData<VE>, VirtualVoxelLODMetadata> for VoxelLOD<VE> {
+    fn to_virtual_for_size(self, grid_size: usize) -> VirtualVoxelLOD<VE> {
         // ENHANCEMENT: Make this call .to_virtual_for_size(self.size()) on children instead of
         // use grid_size and then add the necessary padding in this function.
         let (data, metadata) = self.0.deconstruct();
@@ -247,6 +254,7 @@ impl ToVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
                          updated_bitmask_regions
                      )|
                         bitmask.map(|bm| VoxelLODChunkData {
+                                voxel_type_enum: PhantomData,
                                 bitmask: bm,
                                 voxel_type_ids,
                                 updated_bitmask_regions: updated_bitmask_regions.unwrap(),
@@ -264,8 +272,8 @@ impl ToVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
 }
 
 
-impl FromVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
-    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelLODChunkData, VirtualVoxelLODMetadata>, grid_size: usize) -> Self {
+impl<VE: VoxelTypeEnum> FromVirtual<VoxelLODChunkData<VE>, VirtualVoxelLODMetadata> for VoxelLOD<VE> {
+    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelLODChunkData<VE>, VirtualVoxelLODMetadata>, grid_size: usize) -> Self {
         let (data, metadata) = virtual_grid.deconstruct();
         let (bitmask_grid, voxel_id_grid, update_grid) =
             data.into_iter().map(
@@ -278,6 +286,7 @@ impl FromVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
         VoxelLOD(
             PhysicalMemoryGridStruct {
                 data: VoxelLODData {
+                    voxel_type_enum: PhantomData,
                     bitmask_layer: PhysicalMemoryGridLayer::from_virtual_for_size(
                         VirtualMemoryGridStruct::new(
                             bitmask_grid,
@@ -304,5 +313,243 @@ impl FromVirtual<VoxelLODChunkData, VirtualVoxelLODMetadata> for VoxelLOD {
                 metadata: metadata.this,
             }
         )
+    }
+}
+
+
+pub fn calc_full_bitmask<VE: VoxelTypeEnum>(voxel_ids: &ChunkVoxelIDs, bitmask: &mut ChunkBitmask) {
+    for i in 0..voxel_ids.n_voxels() {
+        if VE::from_u8(voxel_ids[i]).unwrap().def().is_visible {
+            bitmask.set_block_true(i);
+        }
+        else {
+            bitmask.set_block_false(i);
+        }
+    }
+}
+
+
+/// Given a current lvl/LOD and a lower lvl/LOD, find all the voxels in the lower lvl/LOD that make
+/// up the voxel at 'index' in the current lvl/LOD and return an iterator over their indices.
+fn voxels_in_lower_lod(
+    index: usize,
+    lvl: usize,
+    lod: usize,
+    lower_lvl: usize,
+    lower_lod: usize,
+    n_lods: usize,
+    chunk_size: usize,
+) -> Box<dyn Iterator<Item = usize>> {
+    let (next_lvl, next_lod) = {
+        if (lvl > lower_lvl && lod > 0) || (lod > lower_lod) {
+            // Decrement LOD
+            (lvl, lod-1)
+        }
+        else if lvl > lower_lvl {
+            // Decrement lvl
+            (lvl-1, n_lods)
+        }
+        else {
+            // At lower_lvl, lower_lod so done accumulating indices
+            return Box::new([index].into_iter()) as Box<dyn Iterator<Item = usize>>
+        }
+    };
+
+    let next_lod_z_incr = chunk_size >> next_lod;
+    let next_lod_y_incr = next_lod_z_incr * next_lod_z_incr;
+    let next_lod_index = index.to_le() << 3;
+
+    Box::new(
+        [
+            next_lod_index,
+            next_lod_index + 1,
+            next_lod_index + next_lod_z_incr,
+            next_lod_index + 1 + next_lod_z_incr,
+            next_lod_index + next_lod_y_incr,
+            next_lod_index + 1 + next_lod_y_incr,
+            next_lod_index + next_lod_z_incr + next_lod_y_incr,
+            next_lod_index + 1 + next_lod_z_incr + next_lod_y_incr,
+        ].into_iter().flat_map(move |i|
+            voxels_in_lower_lod(
+                i,
+                next_lvl,
+                next_lod,
+                lower_lvl,
+                lower_lod,
+                n_lods,
+                chunk_size,
+            )
+        )
+    )
+}
+
+
+/// Provides access to chunk voxels to edit and recalculates the full bitmask when dropped.
+pub struct VoxelLODChunkEditor<'a, VE: VoxelTypeEnum> {
+    voxel_type_enum: PhantomData<VE>,
+    pub voxel_ids: &'a mut ChunkVoxelIDs,
+    bitmask: &'a mut ChunkBitmask,
+}
+impl<'a, VE: VoxelTypeEnum> Drop for VoxelLODChunkEditor<'a, VE> {
+    fn drop(&mut self) {
+        calc_full_bitmask::<VE>(self.voxel_ids, self.bitmask);
+    }
+}
+
+impl<VE: VoxelTypeEnum> Placeholder for VoxelLODChunkData<VE> {
+    fn placeholder(&self) -> Self {
+        VoxelLODChunkData {
+            voxel_type_enum: PhantomData,
+            bitmask: self.bitmask.placeholder(),
+            voxel_type_ids: self.voxel_type_ids.as_ref().map(|vti| vti.placeholder()),
+            updated_bitmask_regions: self.updated_bitmask_regions.placeholder(),
+        }
+    }
+}
+impl<VE: VoxelTypeEnum> VoxelLODChunkData<VE> {
+    /// Overwrite voxel data. This will allow editing of the voxel IDs directly and automatically
+    /// recalculate the full bitmask when VoxelLODChunkEditor is dropped. Please don't resize the
+    /// voxel ID vec.
+    pub fn overwrite(&mut self) -> VoxelLODChunkEditor<VE> {
+        debug_assert!(self.voxel_type_ids.is_some());
+
+        VoxelLODChunkEditor {
+            voxel_type_enum: PhantomData::<VE>,
+            voxel_ids: &mut self.voxel_type_ids.as_mut().unwrap().data,
+            bitmask: &mut self.bitmask.data,
+        }
+    }
+
+    /// Set a single voxel
+    pub fn set_voxel(&mut self, index: usize, voxel_typ: VE) {
+        debug_assert!(self.voxel_type_ids.is_some());
+
+        self.voxel_type_ids.as_mut().unwrap().data[index] = voxel_typ.to_u8().unwrap();
+        self.bitmask.data.set_block(index, voxel_typ.def().is_visible);
+    }
+
+    /// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
+    /// bitmask from a lower level. This should not be called when this LOD contains voxel ID data.
+    pub fn update_bitmask_from_lower_lod(
+        &mut self,
+        bitmask: &ChunkBitmask,
+        curr_lvl: usize,
+        curr_lod: usize,
+        lower_lod: usize,
+        lower_lvl: usize,
+        chunk_size: usize,
+        n_chunk_lvls: usize,
+        n_lods: usize,
+        lod_block_fill_thresh: f32,
+    ) {
+        // ENHANCEMENT: Figure out how to encode this limitation (and others in this impl) in type
+        //              state. This will probably require a big rework because you couldn't store
+        //              LODs as a vector anymore.
+        debug_assert!(self.voxel_type_ids.is_none());
+
+        for vox_index in 0..cubed((chunk_size*(n_chunk_lvls - curr_lvl)).to_le() >> curr_lod) {
+            self.update_bitmask_bit_from_lower_lod(
+                vox_index,
+                bitmask,
+                curr_lvl,
+                curr_lod,
+                lower_lod,
+                lower_lvl,
+                chunk_size,
+                n_lods,
+                lod_block_fill_thresh,
+            )
+        }
+    }
+
+    pub fn update_bitmask_bit_from_lower_lod(
+        &mut self,
+        voxel_index: usize,
+        bitmask: &ChunkBitmask,
+        curr_lvl: usize,
+        curr_lod: usize,
+        lower_lod: usize,
+        lower_lvl: usize,
+        chunk_size: usize,
+        n_lods: usize,
+        lod_block_fill_thresh: f32,
+    ) {
+        debug_assert!(self.voxel_type_ids.is_none());
+
+        // Index of the lower corner of the 2x2x2 area in the lower LOD data we want to look at
+        let mut visible_count = 0;
+        let mut count = 0;
+
+        for idx in voxels_in_lower_lod(
+            voxel_index,
+            curr_lvl,
+            curr_lod,
+            lower_lvl,
+            lower_lod,
+            n_lods,
+            chunk_size
+        ) {
+            count += 1;
+
+            if bitmask.get(idx) {
+                visible_count += 1;
+            }
+        }
+
+        self.bitmask.data.set_block(voxel_index, visible_count as f32 >= lod_block_fill_thresh * count as f32);
+    }
+
+    pub fn calc_from_lower_lod_voxels(
+        &mut self,
+        voxels: &ChunkVoxelIDs,
+        curr_lvl: usize,
+        curr_lod: usize,
+        lower_lod: usize,
+        lower_lvl: usize,
+        chunk_size: usize,
+        n_chunk_lvls: usize,
+        n_lods: usize,
+        lod_block_fill_thresh: f32,
+    ) {
+        debug_assert!(self.voxel_type_ids.is_some());
+
+        for vox_index in 0..cubed((chunk_size*(n_chunk_lvls - curr_lvl)).to_le() >> curr_lod) {
+            // Index of the lower corner of the 2x2x2 area in the lower LOD data we want to look at
+            let mut visible_count = 0;
+            let mut count = 0;
+            let mut type_counts = HashMap::<u8, u32>::new();
+
+            for idx in voxels_in_lower_lod(
+                vox_index,
+                curr_lvl,
+                curr_lod,
+                lower_lvl,
+                lower_lod,
+                n_lods,
+                chunk_size
+            ) {
+                count += 1;
+
+                let id = voxels[idx];
+                let vox_type = VE::from_u8(id).unwrap();
+                if vox_type.def().is_visible {
+                    visible_count += 1;
+                    match type_counts.get_mut(&id) {
+                        None => { type_counts.insert(id, 1); },
+                        Some(c) => { *c += 1; },
+                    }
+                }
+            }
+
+            if visible_count as f32 >= lod_block_fill_thresh * count as f32 {
+                self.voxel_type_ids.as_mut().unwrap().data[vox_index] = type_counts.into_iter()
+                    .max_by(|a, b| a.1.cmp(&b.1)).map(|(k, _)| k).unwrap();
+            }
+            else {
+                self.voxel_type_ids.as_mut().unwrap().data[vox_index] = 0;
+            }
+        }
+
+        calc_full_bitmask::<VE>(&self.voxel_type_ids.as_mut().unwrap().data, &mut self.bitmask.data);
     }
 }

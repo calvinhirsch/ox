@@ -2,23 +2,25 @@ use std::sync::Arc;
 use cgmath::{Array, Vector3};
 use super::lod::{VirtualVoxelLOD, VirtualVoxelLODMetadata, VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams};
 use crate::renderer::component::voxels::VoxelData;
-use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, Placeholder, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector};
 use derive_more::Deref;
 use hashbrown::{HashMap};
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
-use crate::world::loader::ChunkLoadQueueItem;
+use crate::voxel_type::VoxelTypeEnum;
+use crate::world::loader::{ChunkLoadQueueItem};
 use crate::world::mem_grid::utils::cubed;
+use crate::world::mem_grid::voxel::ChunkVoxelIDs;
 
 
 #[derive(Deref)]
-pub struct VoxelMemoryGrid(PhysicalMemoryGridStruct<VoxelMemoryGridData, VoxelMemoryGridMetadata>);
+pub struct VoxelMemoryGrid<VE: VoxelTypeEnum>(PhysicalMemoryGridStruct<VoxelMemoryGridData<VE>, VoxelMemoryGridMetadata>);
 #[derive(Deref)]
-pub struct VirtualVoxelMemoryGrid(VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata>);
+pub struct VirtualVoxelMemoryGrid<VE: VoxelTypeEnum>(VirtualMemoryGridStruct<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata>);
 
-pub struct VoxelMemoryGridData {
-    lods: Vec<Vec<Option<VoxelLOD>>>
+pub struct VoxelMemoryGridData<VE: VoxelTypeEnum> {
+    lods: Vec<Vec<Option<VoxelLOD<VE>>>>
 }
 
 pub struct VoxelMemoryGridMetadata {
@@ -39,16 +41,17 @@ impl MemoryGridMetadata for VirtualVoxelMemoryGridMetadata {
 }
 
 #[derive(Clone)]
-pub struct VoxelMemoryGridChunkData {
-    lods: Vec<Vec<Option<VoxelLODChunkData>>>,
+pub struct VoxelMemoryGridChunkData<VE: VoxelTypeEnum> {
+    pub lods: Vec<Vec<Option<VoxelLODChunkData<VE>>>>,
 }
 
+#[derive(Clone)]
 pub struct VoxelChunkLoadingQueueItemData {
     pub lods: Vec<Vec<bool>>,
 }
 
 
-impl VoxelMemoryGrid {
+impl<VE: VoxelTypeEnum> VoxelMemoryGrid<VE> {
     fn voxels_per_tlc(chunk_size: usize, n_lvls: usize, lvl: usize, lod: usize) -> usize {
         chunk_size.pow((n_lvls - lvl) as u32).to_le() >> (lod * 3)
     }
@@ -121,7 +124,7 @@ impl VoxelMemoryGrid {
             ).collect()
     }
 
-    fn apply_and_queue<F: FnMut(&mut VoxelLOD) -> Vec<ChunkLoadQueueItem<()>>>(
+    fn apply_and_queue<F: FnMut(&mut VoxelLOD<VE>) -> Vec<ChunkLoadQueueItem<()>>>(
         &mut self,
         mut to_apply: F
     ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadingQueueItemData>> {
@@ -152,8 +155,8 @@ impl VoxelMemoryGrid {
         chunks.into_values().collect()
     }
 }
-impl PhysicalMemoryGrid for VoxelMemoryGrid {
-    type Data = VoxelMemoryGridData;
+impl<VE: VoxelTypeEnum> PhysicalMemoryGrid for VoxelMemoryGrid<VE> {
+    type Data = VoxelMemoryGridData<VE>;
     type Metadata = VoxelMemoryGridMetadata;
     type ChunkLoadQueueItemData = VoxelChunkLoadingQueueItemData;
 
@@ -170,8 +173,8 @@ impl PhysicalMemoryGrid for VoxelMemoryGrid {
         self.apply_and_queue(|lod| lod.shift(shift, load_in_from_edge, load_buffer))
     }
 }
-impl ToVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid {
-    fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> {
+impl<VE: VoxelTypeEnum> ToVirtual<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid<VE> {
+    fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> {
         let (chunk_iters, metadata): (Vec<Vec<_>>, Vec<Vec<_>>) =
             self.0.data.lods.into_iter()
             .map(|lvl_lods| {
@@ -201,11 +204,11 @@ impl ToVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for Vox
         )
     }
 }
-impl FromVirtual<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid {
-    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelMemoryGridChunkData, VirtualVoxelMemoryGridMetadata>, grid_size: usize) -> Self {
+impl<VE: VoxelTypeEnum> FromVirtual<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid<VE> {
+    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata>, grid_size: usize) -> Self {
         let (data, metadata) = virtual_grid.deconstruct();
 
-        let mut chunk_data: Vec<Vec<Option<Vec<Option<VoxelLODChunkData>>>>> = metadata.lods.iter().map(|lvl_meta|
+        let mut chunk_data: Vec<Vec<Option<Vec<Option<VoxelLODChunkData<VE>>>>>> = metadata.lods.iter().map(|lvl_meta|
             lvl_meta.iter().map(|meta|
                 meta.as_ref().map(|_| vec![None; cubed(grid_size)])
             ).collect()
@@ -264,5 +267,100 @@ impl<I: Iterator> Iterator for LODSplitter<I> {
             .iter_mut()
             .map(|iters| iters.iter_mut().map(|iter| iter.as_mut()?.next()).collect())
             .collect()
+    }
+}
+
+
+impl<VE: VoxelTypeEnum> Placeholder for VoxelMemoryGridChunkData<VE> {
+    fn placeholder(&self) -> Self {
+        VoxelMemoryGridChunkData {
+            lods: self.lods.iter().map(|lvl_lods|
+                lvl_lods.iter().map(|lod_o|
+                    lod_o.as_ref().map(|lod| lod.placeholder())
+                ).collect()
+            ).collect()
+        }
+    }
+}
+impl<VE: VoxelTypeEnum> VoxelMemoryGridChunkData<VE> {
+    pub fn load_new<F: Fn(TLCPos<i64>, usize, usize, &mut ChunkVoxelIDs)>(
+        &mut self,
+        pos: TLCPos<i64>,
+        lods_to_load: Vec<Vec<bool>>,
+        gen_func: F,
+        chunk_size: usize,
+        n_chunk_lvls: usize,
+        n_lods: usize,
+        lod_block_fill_thresh: f32,
+    ) {
+        // Last lvl/LOD that contained voxel ID info
+        let (mut last_lvl, mut last_lod) = (None, None);
+        let (mut last_bitmask_lvl, mut last_bitmask_lod) = (None, None);
+
+        let mut visited_lods: Vec<Vec<&Option<VoxelLODChunkData<VE>>>> = vec![vec![]; n_chunk_lvls];
+
+        for (lvl, (lvl_lods_to_load, lvl_data)) in lods_to_load.iter()
+            .zip(self.lods.iter_mut()).enumerate() {
+            for (lod, (load, lod_data_o)) in
+                lvl_lods_to_load.iter().zip(lvl_data.iter_mut()).enumerate() {
+
+                if let Some(ref mut lod_data) = lod_data_o {
+                    if *load {
+                        // Need to load the info in this chunk
+                        match lod_data.voxel_type_ids {
+                            // If this chunk only has a bitmask, update from previous LOD bitmask
+                            None => lod_data.update_bitmask_from_lower_lod(
+                                &((&visited_lods[last_bitmask_lvl.unwrap()] as &Vec<&Option<_>>)
+                                    [last_bitmask_lod.unwrap()] as &Option<VoxelLODChunkData<VE>>)
+                                    .as_ref().unwrap().bitmask.data,
+                                lvl,
+                                lod,
+                                last_bitmask_lvl.unwrap(),
+                                last_bitmask_lod.unwrap(),
+                                chunk_size,
+                                n_chunk_lvls,
+                                n_lods,
+                                lod_block_fill_thresh,
+                            ),
+                            Some(_) => {
+                                if let (Some(l_lvl), Some(l_lod)) = (last_lvl, last_lod) {
+                                    // Load voxels based on higher fidelity LOD that is already loaded
+                                    lod_data.calc_from_lower_lod_voxels(
+                                        &((&visited_lods[l_lvl] as &Vec<&Option<_>>)
+                                            [l_lod] as &Option<VoxelLODChunkData<VE>>)
+                                            .as_ref().unwrap().voxel_type_ids.as_ref().unwrap().data,
+                                        lvl,
+                                        lod,
+                                        l_lvl,
+                                        l_lod,
+                                        chunk_size,
+                                        n_chunk_lvls,
+                                        n_lods,
+                                        lod_block_fill_thresh,
+                                    )
+                                } else {
+                                    // Generate voxels
+                                    gen_func(
+                                        pos,
+                                        lvl,
+                                        lod,
+                                        lod_data.overwrite().voxel_ids
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else if lod_data.voxel_type_ids.is_some() {
+                        last_lvl = Some(lvl);
+                        last_lod = Some(lod);
+                    }
+
+                    last_bitmask_lod = Some(lod);
+                    last_bitmask_lvl = Some(lvl);
+                }
+
+                visited_lods[lvl].push(lod_data_o);
+            }
+        }
     }
 }
