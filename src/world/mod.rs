@@ -39,12 +39,13 @@ pub struct World<MG, PMG, C, VMD>
 where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD> + PhysicalMemoryGrid,
       C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send + 'static,
       VMD: MemoryGridMetadata {
-    physical_type: PhantomData<PMG>,
+    // physical_type: PhantomData<PMG>,
     chunk_data_type: PhantomData<C>,
     virtual_grid_metadata: PhantomData<VMD>,
 
     pub mem_grid: MG,
     chunk_loader: ChunkLoader<PMG::ChunkLoadQueueItemData, C>,
+    chunks_to_load: Vec<ChunkLoadQueueItem<PMG::ChunkLoadQueueItemData>>,
     camera: Camera,
     metadata: WorldMetadata,
 }
@@ -69,11 +70,12 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
         tlc_load_dist_thresh: u32,
     ) -> World<PMG, PMG, C, VMD> {
         World {
-            physical_type: PhantomData,
+            // physical_type: PhantomData,
             chunk_data_type: PhantomData,
             virtual_grid_metadata: PhantomData,
             mem_grid,
             chunk_loader,
+            chunks_to_load: vec![],
             camera,
             metadata: WorldMetadata {
                 tlc_size,
@@ -87,11 +89,13 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
         self.mem_grid.queue_load_all()
     }
 
+    pub fn borrow_camera(&self) -> &Camera { &self.camera }
+
     pub fn move_camera(
         &mut self,
         camera_controller: &mut impl CameraController,
         dt: Duration
-    ) -> Vec<ChunkLoadQueueItem<PMG::ChunkLoadQueueItemData>> {
+    ) {
         fn pt_gr(pt: Point3<f32>, val: f32) -> bool {
             pt.x > val && pt.y > val && pt.z > val
         }
@@ -158,24 +162,37 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
             }
         }
 
-        self.mem_grid.shift(
-            TLCVector(move_vector.cast::<i32>().unwrap()),
-            TLCVector(load_in_from_edge.0.cast::<i32>().unwrap()),
-            load_buffer
-        )
+        self.chunks_to_load.extend(
+            self.mem_grid.shift(
+                TLCVector(move_vector.cast::<i32>().unwrap()),
+                TLCVector(load_in_from_edge.0.cast::<i32>().unwrap()),
+                load_buffer
+            )
+        );
+    }
+
+    pub fn set_camera_res(&mut self, width: u32, height: u32) {
+        self.camera.resolution = (width, height);
     }
 
     pub fn unlock(self) -> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD> {
-        World {
-            physical_type: Default::default(),
+        let start_tlc = self.mem_grid.start_tlc();
+
+        let mut world = World {
+            // physical_type: Default::default(),
             chunk_data_type: Default::default(),
             virtual_grid_metadata: Default::default(),
             mem_grid: self.mem_grid.to_virtual(),
 
             chunk_loader: self.chunk_loader,
+            chunks_to_load: vec![],
             camera: Default::default(),
             metadata: self.metadata,
-        }
+        };
+
+        world.chunk_loader.sync(start_tlc, &mut world.mem_grid, self.chunks_to_load);
+
+        world
     }
 }
 
@@ -185,12 +202,13 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
       VMD: MemoryGridMetadata {
     pub fn lock(self) -> World<PMG, PMG, C, VMD> {
         World {
-            physical_type: Default::default(),
+            // physical_type: Default::default(),
             chunk_data_type: Default::default(),
             virtual_grid_metadata: Default::default(),
             mem_grid: PMG::from_virtual(self.mem_grid),
 
             chunk_loader: self.chunk_loader,
+            chunks_to_load: self.chunks_to_load,
             camera: Default::default(),
             metadata: self.metadata,
         }

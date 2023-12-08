@@ -16,12 +16,14 @@ impl VoxelData {
         VoxelData { lods }
     }
 
-    pub fn update_staging_buffers(&mut self, updates: Vec<Vec<Option<VoxelLODUpdate>>>) {
+    pub fn update_staging_buffers(&mut self, updates: Vec<Vec<Option<Vec<VoxelLODUpdate>>>>) {
         for (lvl_updates, lvl) in updates.into_iter().zip(self.lods.iter_mut()) {
             for (lod_updates_o, lod_o) in lvl_updates.into_iter().zip(lvl.iter_mut()) {
                 match (lod_updates_o, lod_o) {
                     (Some(lod_updates), Some(lod)) => {
-                        lod.update_staging_buffers(lod_updates);
+                        for update in lod_updates {
+                            lod.update_staging_buffers(update);
+                        }
                     }
                     (None, None) => {}
                     _ => panic!(),

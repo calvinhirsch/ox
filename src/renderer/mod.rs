@@ -14,7 +14,6 @@ pub mod utils;
 
 use crate::renderer::component::DataComponentSet;
 use crate::renderer::swapchain::SwapchainPipelineParams;
-use crate::world::camera::Camera;
 use context::Context;
 use swapchain::SwapchainPipeline;
 use crate::renderer::transfer::TransferManager;
@@ -72,14 +71,12 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
 
     pub fn window_resized(
         &mut self,
-        camera: &mut Camera,
         window: &mut Window,
     ) {
         let new_dimensions = window.inner_size();
         window
             .set_cursor_grab(CursorGrabMode::Confined)
             .unwrap_or_default();
-        camera.resolution = (new_dimensions.width, new_dimensions.height);
 
         self.swapchain_pipeline.resize(
             &new_dimensions,

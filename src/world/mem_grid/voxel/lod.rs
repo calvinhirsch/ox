@@ -38,9 +38,14 @@ pub struct VoxelLODData<VE: VoxelTypeEnum> {
 pub struct VoxelLODMetadata {
     size: usize,
     voxels_per_tlc: usize,
+    start_tlc: TLCPos<i64>,
 }
 impl MemoryGridMetadata for VoxelLODMetadata {
+    // ENHANCEMENT: Requiring these to be stored in metadata is kind of a bad solution, especially
+    //              for start_tlc because you always have to remember to update it in shift(). The
+    //              main annoyance with fixing this is the set_voxel functions.
     fn size(&self) -> usize { self.size }
+    fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
 #[derive(Clone)]
@@ -52,6 +57,7 @@ pub struct VirtualVoxelLODMetadata {
 }
 impl MemoryGridMetadata for VirtualVoxelLODMetadata {
     fn size(&self) -> usize { self.this.size }
+    fn start_tlc(&self) -> TLCPos<i64> { self.this.start_tlc() }
 }
 
 #[derive(Clone)]
@@ -115,6 +121,7 @@ impl<VE: VoxelTypeEnum> VoxelLOD<VE> {
                     VoxelLODMetadata {
                         size: params.size,
                         voxels_per_tlc,
+                        start_tlc,
                     }
                 )
 
@@ -211,7 +218,11 @@ impl<VE: VoxelTypeEnum> PhysicalMemoryGrid for VoxelLOD<VE> {
             |layer| layer.shift(shift, load_in_from_edge, load_buffer)
         );
         self.0.data.updated_bitmask_regions_layer.shift(shift, load_in_from_edge, load_buffer);
-        self.0.data.bitmask_layer.shift(shift, load_in_from_edge, load_buffer)
+        let r = self.0.data.bitmask_layer.shift(shift, load_in_from_edge, load_buffer);
+
+        self.0.metadata.start_tlc = self.data.bitmask_layer.start_tlc();
+
+        r
     }
 }
 

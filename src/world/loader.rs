@@ -42,7 +42,7 @@ pub struct ChunkLoaderParams {
     pub thread_capacity: usize,
 }
 
-impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + Clone + 'static> ChunkLoader<QI, C> {
+impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<QI, C> {
     pub fn new(params: ChunkLoaderParams) -> Self {
         ChunkLoader {
             active_threads: (0..params.thread_capacity).map(|_| None).collect(),
@@ -103,6 +103,7 @@ impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + Clone + 'static> Chun
         }
 
         // Add new items to queue
+        // TODO: if an item's memory overlaps with one already in the queue then figure out what to do
         for item in queue {
             let priority = (99.99 - (Vector3::from_value(grid.size()/2).cast::<f32>().unwrap()
                 .distance((item.pos.0 - start_tlc.0).cast::<f32>().unwrap())) * grid.size() as f32 / 50.) as u8;

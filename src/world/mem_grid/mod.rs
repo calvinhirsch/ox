@@ -1,7 +1,9 @@
 use std::ops::Deref;
 use derive_new::new;
-use crate::world::{TLCVector};
+use crate::world::{TLCPos, TLCVector};
 use crate::world::loader::ChunkLoadQueueItem;
+use crate::world::mem_grid::utils::index_for_pos;
+use crate::world::mem_grid::voxel::grid::GlobalVoxelPos;
 
 pub mod layer;
 mod layer_set;
@@ -23,17 +25,38 @@ pub struct VirtualMemoryGridStruct<C: Placeholder, MD: MemoryGridMetadata> {
 
 pub trait MemoryGridMetadata {
     fn size(&self) -> usize;
+    fn start_tlc(&self) -> TLCPos<i64>;
 }
 
 
 impl<D, MD: MemoryGridMetadata> PhysicalMemoryGridStruct<D, MD> {
     pub fn deconstruct(self) -> (D, MD) { (self.data, self.metadata) }
     pub fn size(&self) -> usize { self.metadata.size() }
+    pub fn start_tlc(&self) -> TLCPos<i64> { self.metadata.start_tlc() }
 }
 
 impl<C: Placeholder, MD: MemoryGridMetadata> VirtualMemoryGridStruct<C, MD> {
     pub fn deconstruct(self) -> (Vec<Option<C>>, MD) { (self.chunks, self.metadata) }
     pub fn size(&self) -> usize { self.metadata.size() }
+    pub fn start_tlc(&self) -> TLCPos<i64> { self.metadata.start_tlc() }
+
+    pub fn chunk_index(&self, global_tlc_pos: TLCPos<i64>) -> Option<usize> {
+        Some(
+            index_for_pos(
+                (global_tlc_pos.0 - self.start_tlc().0).cast::<usize>()?,
+                self.size(),
+            )
+        )
+    }
+
+    pub fn chunk_for(&self, global_pos: GlobalVoxelPos) -> Option<&C> {
+        self.chunks.get(self.chunk_index(global_pos.tlc)?)?.as_ref()
+    }
+
+    pub fn chunk_for_mut(&mut self, global_pos: GlobalVoxelPos) -> Option<&mut C> {
+        let idx = self.chunk_index(global_pos.tlc)?;
+        self.chunks.get_mut(idx)?.as_mut()
+    }
 }
 
 

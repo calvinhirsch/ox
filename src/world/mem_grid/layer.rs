@@ -18,6 +18,7 @@ pub struct MemoryGridLayerMetadata<E> {
 }
 impl<E> MemoryGridMetadata for MemoryGridLayerMetadata<E> {
     fn size(&self) -> usize { self.size }
+    fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
 #[derive(Deref, new)]

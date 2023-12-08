@@ -1,16 +1,16 @@
 use std::sync::Arc;
-use cgmath::{Array, Vector3};
+use cgmath::{Array, EuclideanSpace, Vector3};
 use super::lod::{VirtualVoxelLOD, VirtualVoxelLODMetadata, VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams};
 use crate::renderer::component::voxels::VoxelData;
 use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, Placeholder, ToVirtual, VirtualMemoryGridStruct};
-use crate::world::{TLCPos, TLCVector};
+use crate::world::{TLCPos, TLCVector, VoxelPos};
 use derive_more::Deref;
 use hashbrown::{HashMap};
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::{ChunkLoadQueueItem};
-use crate::world::mem_grid::utils::cubed;
+use crate::world::mem_grid::utils::{cubed, index_for_pos_in_tlc};
 use crate::world::mem_grid::voxel::ChunkVoxelIDs;
 
 
@@ -23,21 +23,27 @@ pub struct VoxelMemoryGridData<VE: VoxelTypeEnum> {
     lods: Vec<Vec<Option<VoxelLOD<VE>>>>
 }
 
+#[derive(Clone)]
 pub struct VoxelMemoryGridMetadata {
     size: usize,
+    chunk_size: usize,
+    start_tlc: TLCPos<i64>,
     n_lvls: usize,
     n_lods: usize,
 }
 impl MemoryGridMetadata for VoxelMemoryGridMetadata {
     fn size(&self) -> usize { self.size }
+    fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
+#[derive(Clone)]
 pub struct VirtualVoxelMemoryGridMetadata {
     this: VoxelMemoryGridMetadata,
     lods: Vec<Vec<Option<VirtualVoxelLODMetadata>>>
 }
 impl MemoryGridMetadata for VirtualVoxelMemoryGridMetadata {
     fn size(&self) -> usize { self.this.size }
+    fn start_tlc(&self) -> TLCPos<i64> { self.this.start_tlc }
 }
 
 #[derive(Clone)]
@@ -105,6 +111,8 @@ impl<VE: VoxelTypeEnum> VoxelMemoryGrid<VE> {
                     VoxelMemoryGridData { lods: grid_lods },
                     VoxelMemoryGridMetadata {
                         size,
+                        chunk_size,
+                        start_tlc,
                         n_lvls,
                         n_lods,
                     },
@@ -170,7 +178,21 @@ impl<VE: VoxelTypeEnum> PhysicalMemoryGrid for VoxelMemoryGrid<VE> {
         load_in_from_edge: TLCVector<i32>,
         load_buffer: [bool; 3]
     ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadingQueueItemData>> {
-        self.apply_and_queue(|lod| lod.shift(shift, load_in_from_edge, load_buffer))
+        let r =
+            self.apply_and_queue(|lod| lod.shift(shift, load_in_from_edge, load_buffer));
+
+        for lvl in self.data.lods.iter() {
+            for lod_o in lvl {
+                if let Some(lod) = lod_o {
+                    if lod.size() == self.size() {
+                        self.0.metadata.start_tlc = lod.start_tlc();
+                        return r;
+                    }
+                }
+            }
+        }
+
+        panic!();
     }
 }
 impl<VE: VoxelTypeEnum> ToVirtual<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid<VE> {
@@ -361,6 +383,48 @@ impl<VE: VoxelTypeEnum> VoxelMemoryGridChunkData<VE> {
 
                 visited_lods[lvl].push(lod_data_o);
             }
+        }
+    }
+
+    pub fn set_voxel(&mut self, index_in_tlc: usize, voxel_typ: VE, meta: &VirtualVoxelMemoryGridMetadata) {
+        for lvl in 0..meta.this.n_lvls {
+            for lod in 0..meta.this.n_lods {
+                if let Some(data) = self.lods[lvl][lod].as_mut() {
+                    let block_size = meta.this.chunk_size.pow(lvl as u32) *2usize.pow(lod as u32);
+                    data.set_voxel(index_in_tlc / cubed(block_size), voxel_typ);
+                }
+            }
+        }
+    }
+
+    pub fn set_voxel_pos(&mut self, pos: VoxelPos<u32>, voxel_typ: VE, meta: &VirtualVoxelMemoryGridMetadata) {
+        self.set_voxel(
+            index_for_pos_in_tlc(pos.0, meta.this.chunk_size, meta.this.n_lvls, 0, 0),
+            voxel_typ,
+            meta,
+        );
+    }
+}
+
+
+#[derive(Clone, Copy)]
+pub struct GlobalVoxelPos {
+    pub tlc: TLCPos<i64>,
+    pub voxel_index: usize,
+}
+impl GlobalVoxelPos {
+    pub fn new(
+        global_pos: VoxelPos<i64>,
+        chunk_size: usize,
+        n_chunk_lvls: usize,
+    ) -> Self {
+        let tlc_size = chunk_size.pow(n_chunk_lvls as u32);
+        let global_tlc = global_pos.0 / tlc_size as i64;
+        let pos_in_tlc = (global_pos.0 - (global_tlc * tlc_size as i64).to_vec()).cast::<u32>().unwrap();
+
+        GlobalVoxelPos {
+            tlc: TLCPos(global_tlc),
+            voxel_index: index_for_pos_in_tlc(pos_in_tlc, chunk_size, n_chunk_lvls, 0, 0),
         }
     }
 }
