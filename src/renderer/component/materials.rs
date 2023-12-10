@@ -11,14 +11,14 @@ use crate::renderer::component::{DataComponent, DataComponentWrapper};
 #[repr(C)]
 pub struct Material {
     pub color: [f32; 3],
-    _pad1: f32,
+    pub _pad1: f32,
     pub specular_color: [f32; 3],
-    _pad2: f32,
+    pub _pad2: f32,
     pub emission_color: [f32; 3],
     pub emission_strength: f32,
     pub specular_prob_perpendicular: f32,
     pub specular_prob_parallel: f32,
-    _pad3: [f32; 2],
+    pub _pad3: [f32; 2],
 }
 
 impl Default for Material {

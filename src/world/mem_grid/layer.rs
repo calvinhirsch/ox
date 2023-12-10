@@ -2,13 +2,13 @@ use crate::world::mem_grid::utils::{amod, pos_for_index, index_for_pos};
 use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, Placeholder, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector};
 use cgmath::{Array, EuclideanSpace, Vector3, Point3};
-use derive_more::Deref;
+use derive_more::{Deref, DerefMut};
 use derive_new::new;
 use hashbrown::HashSet;
 use crate::world::loader::ChunkLoadQueueItem;
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemoryGridLayerMetadata<E> {
     size: usize, // Size of grid in number of TLCs, 1 more than the rendered area size in each dimension for pre-loading
     tlc_size: usize,
@@ -21,20 +21,20 @@ impl<E> MemoryGridMetadata for MemoryGridLayerMetadata<E> {
     fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
-#[derive(Deref, new)]
+#[derive(Deref, DerefMut, new, Clone, Debug)]
 pub struct PhysicalMemoryGridLayer<C: Clone, MD>(
     PhysicalMemoryGridStruct<MemoryGridLayerData<C>, MemoryGridLayerMetadata<MD>>
 );
 pub type VirtualMemoryGridLayer<C, MD> =
     VirtualMemoryGridStruct<MemoryGridLayerChunkData<C>, MemoryGridLayerMetadata<MD>>;
 
-#[derive(Clone, new)]
+#[derive(Clone, Debug, new)]
 pub struct MemoryGridLayerData<C: Clone> {
     chunks: Vec<C>,
     chunks_loaded: Vec<bool>,
 }
 
-#[derive(new, Clone)]  // Clone is not really necessary, just easier for initializing vecs with None
+#[derive(new, Clone, Debug)]
 pub struct MemoryGridLayerChunkData<C: Clone + Default> {
     pub data: C,
     loaded: bool,
@@ -171,18 +171,20 @@ impl<PC: Clone, VC: Default + Clone + From<PC>, MD> ToVirtual<MemoryGridLayerChu
         for (chunk_i, (chunk_data, loaded)) in data.chunks.into_iter().zip(data.chunks_loaded.iter()).enumerate() {
             // If this layer is smaller than full grid, add padding to virtual position so it
             // is centered
-            let virtual_pos = metadata
-                .virtual_grid_pos_for_grid_pos(
-                    TLCVector(pos_for_index(chunk_i, metadata.size)),
-                    vgrid_size,
-                ).0;
-
-            vgrid[index_for_pos(virtual_pos, vgrid_size)] = Some(
-                MemoryGridLayerChunkData::<VC>::new(
-                    chunk_data.into(),
-                    *loaded,
-                )
-            );
+            match metadata.virtual_grid_pos_for_grid_pos(
+                TLCVector(pos_for_index(chunk_i, metadata.size)),
+                vgrid_size,
+            ) {
+                None => {},  // This is a buffer chunk, not actively used
+                Some(virtual_pos) => {
+                    vgrid[index_for_pos(virtual_pos.0, vgrid_size)] = Some(
+                        MemoryGridLayerChunkData::<VC>::new(
+                            chunk_data.into(),
+                            *loaded,
+                        )
+                    );
+                }
+            }
         }
 
         VirtualMemoryGridLayer {
@@ -255,19 +257,26 @@ impl<E: Sized> MemoryGridLayerMetadata<E> {
         &self,
         pos: TLCVector<usize>,
         vgrid_size: usize,
-    ) -> TLCVector<usize> {
+    ) -> Option<TLCVector<usize>> {
         let local_vgrid_pos = amod(
             pos.0.cast::<i64>().unwrap() - self.offsets.0.cast::<i64>().unwrap(),
             self.size,
         );
-        TLCVector(
-            local_vgrid_pos
-                + Vector3::<usize>::from_value(if self.size < vgrid_size {
-                    (vgrid_size - self.size) / 2
-                } else {
-                    0
-                }),
-        )
+        if local_vgrid_pos.x >= vgrid_size || local_vgrid_pos.y >= vgrid_size || local_vgrid_pos.z >= vgrid_size {
+            None
+        }
+        else {
+            Some(
+                TLCVector(
+                    local_vgrid_pos
+                        + Vector3::<usize>::from_value(if self.size < vgrid_size {
+                        (vgrid_size - self.size) / 2
+                    } else {
+                        0
+                    }),
+                )
+            )
+        }
     }
 }
 

@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::descriptor_set::allocator::DescriptorSetAllocator;
-use winit::window::{CursorGrabMode, Window};
+use winit::dpi::PhysicalSize;
+use winit::window::{Window};
 
 pub mod buffers;
 pub mod component;
@@ -71,15 +72,10 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
 
     pub fn window_resized(
         &mut self,
-        window: &mut Window,
+        new_dims: PhysicalSize<u32>,
     ) {
-        let new_dimensions = window.inner_size();
-        window
-            .set_cursor_grab(CursorGrabMode::Confined)
-            .unwrap_or_default();
-
         self.swapchain_pipeline.resize(
-            &new_dimensions,
+            &new_dims,
             &self.component_set,
         );
     }

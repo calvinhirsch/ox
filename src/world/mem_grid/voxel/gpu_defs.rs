@@ -1,7 +1,7 @@
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use std::ops::{Index, IndexMut};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChunkVoxelIDs(Vec<VoxelTypeIDs>);
 
 impl From<Vec<VoxelTypeIDs>> for ChunkVoxelIDs {
@@ -34,7 +34,7 @@ impl ChunkVoxelIDs {
     pub fn n_voxels(&self) -> usize { self.0.len() * 128 / VoxelTypeIDs::BITS_PER_VOXEL }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChunkBitmask(Vec<VoxelBitmask>);
 
 impl From<Vec<VoxelBitmask>> for ChunkBitmask {

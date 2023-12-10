@@ -45,10 +45,11 @@ impl Context {
         )
         .expect("failed to create instance");
 
-        let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
+        let window = Arc::new(WindowBuilder::new().build(event_loop).unwrap());
         window
-            .set_cursor_grab(CursorGrabMode::Locked)
+            .set_cursor_grab(CursorGrabMode::Confined)
             .unwrap_or_default();
+        window.set_cursor_visible(false);
 
         let surface = Surface::from_window(Arc::clone(&instance), window).unwrap();
 
@@ -67,7 +68,7 @@ impl Context {
 
         let physical_device = instance
             .enumerate_physical_devices()
-            .unwrap()
+            .unwrap_or_else(|e| panic!("Failed to enumerate physical devices: {}", e))
             .next()
             .expect("No devices.");
         let transfer_queue_family_i = physical_device

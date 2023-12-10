@@ -176,8 +176,6 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
     }
 
     pub fn unlock(self) -> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD> {
-        let start_tlc = self.mem_grid.start_tlc();
-
         let mut world = World {
             // physical_type: Default::default(),
             chunk_data_type: Default::default(),
@@ -190,7 +188,7 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
             metadata: self.metadata,
         };
 
-        world.chunk_loader.sync(start_tlc, &mut world.mem_grid, self.chunks_to_load);
+        world.chunk_loader.sync(&mut world.mem_grid, self.chunks_to_load);
 
         world
     }
