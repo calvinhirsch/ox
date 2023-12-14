@@ -14,7 +14,7 @@ impl VoxelTypeIDs {
     }
 }
 
-#[derive(BufferContents, Clone, Copy)]
+#[derive(BufferContents, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct VoxelBitmask {
     pub mask: u128,

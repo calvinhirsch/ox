@@ -1,5 +1,6 @@
 use cgmath::{Array, Point3, Vector3};
 use std::marker::PhantomData;
+use std::mem;
 use std::time::Duration;
 use num_traits::Zero;
 
@@ -9,8 +10,8 @@ pub mod camera;
 pub mod loader;
 
 use camera::{Camera, controller::CameraController};
-use crate::world::loader::{ChunkLoader, ChunkLoadQueueItem, LoadChunk};
-use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, ToVirtual, VirtualMemoryGridStruct};
+use crate::world::loader::{ChunkLoader, ChunkLoadQueueItem, ChunkLoadQueueItemData, LoadChunk};
+use crate::world::mem_grid::{ChunkCapsule, ChunkEditor, EditMemoryGrid, MemoryGrid, MemoryGridEditor};
 
 /// Position in units of top level chunks
 #[derive(Clone, Copy, Debug)]
@@ -35,19 +36,20 @@ pub struct WorldMetadata {
     buffer_chunk_states: [BufferChunkState; 3],
 }
 
-pub struct World<MG, PMG, C, VMD>
-where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD> + PhysicalMemoryGrid,
-      C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send + 'static,
-      VMD: MemoryGridMetadata {
-    // physical_type: PhantomData<PMG>,
-    chunk_data_type: PhantomData<C>,
-    virtual_grid_metadata: PhantomData<VMD>,
+pub struct World<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> {
+    grid_meta_type: PhantomData<MD>,
+    chunk_editor_type: PhantomData<CE>,
 
     pub mem_grid: MG,
-    chunk_loader: ChunkLoader<PMG::ChunkLoadQueueItemData, C>,
-    chunks_to_load: Vec<ChunkLoadQueueItem<PMG::ChunkLoadQueueItemData>>,
+    chunk_loader: ChunkLoader<'a, MG::ChunkLoadQueueItemData, CE, C, MD>,
+    chunks_to_load: Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>>,
     camera: Camera,
     metadata: WorldMetadata,
+}
+
+pub struct WorldEditor<'a, CE: ChunkEditor<'a>, MD: Clone> {
+    pub mem_grid: MemoryGridEditor<'a, CE, MD>,
+    pub metadata: &'a WorldMetadata,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -58,21 +60,17 @@ pub enum BufferChunkState {
 }
 
 
-impl<PMG, C, VMD> World<PMG, PMG, C, VMD>
-where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
-      C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send,
-      VMD: MemoryGridMetadata{
+impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> World<'a, QI, CE, C, MD, MG> {
     pub fn new(
-        mem_grid: PMG,
-        chunk_loader: ChunkLoader<PMG::ChunkLoadQueueItemData, C>,
+        mem_grid: MG,
+        chunk_loader: ChunkLoader<'a, MG::ChunkLoadQueueItemData, CE, C, MD>,
         camera: Camera,
         tlc_size: usize,
         tlc_load_dist_thresh: u32,
-    ) -> World<PMG, PMG, C, VMD> {
+    ) -> Self {
         World {
-            // physical_type: PhantomData,
-            chunk_data_type: PhantomData,
-            virtual_grid_metadata: PhantomData,
+            grid_meta_type: PhantomData,
+            chunk_editor_type: PhantomData,
             mem_grid,
             chunk_loader,
             chunks_to_load: vec![],
@@ -85,7 +83,7 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
         }
     }
 
-    pub fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<PMG::ChunkLoadQueueItemData>> {
+    pub fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>> {
         self.mem_grid.queue_load_all()
     }
 
@@ -174,47 +172,20 @@ where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
     pub fn set_camera_res(&mut self, width: u32, height: u32) {
         self.camera.resolution = (width, height);
     }
-
-    pub fn unlock(self) -> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD> {
-        let start_tlc = self.mem_grid.start_tlc();
-
-        let mut world = World {
-            // physical_type: Default::default(),
-            chunk_data_type: Default::default(),
-            virtual_grid_metadata: Default::default(),
-            mem_grid: self.mem_grid.to_virtual(),
-
-            chunk_loader: self.chunk_loader,
-            chunks_to_load: vec![],
-            camera: Default::default(),
-            metadata: self.metadata,
-        };
-
-        world.chunk_loader.sync(start_tlc, &mut world.mem_grid, self.chunks_to_load);
-
-        world
-    }
 }
 
-impl<C, VMD, PMG> World<VirtualMemoryGridStruct<C, VMD>, PMG, C, VMD>
-where PMG: ToVirtual<C, VMD> + FromVirtual<C, VMD>,
-      C: LoadChunk<PMG::ChunkLoadQueueItemData> + Send,
-      VMD: MemoryGridMetadata {
-    pub fn lock(self) -> World<PMG, PMG, C, VMD> {
-        World {
-            // physical_type: Default::default(),
-            chunk_data_type: Default::default(),
-            virtual_grid_metadata: Default::default(),
-            mem_grid: PMG::from_virtual(self.mem_grid),
 
-            chunk_loader: self.chunk_loader,
-            chunks_to_load: self.chunks_to_load,
-            camera: Default::default(),
-            metadata: self.metadata,
+impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Default + Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI> + EditMemoryGrid<'a, CE, MD>> World<'a, QI, CE, C, MD, MG> {
+    pub fn edit(&'a mut self) -> WorldEditor<'a, CE, MD> {
+        // Sync with chunk loader and queue new chunks to load
+        let start_tlc = self.mem_grid.start_tlc();
+        let chunks_to_load = mem::take(&mut self.chunks_to_load);
+        let mut mem_grid_editor: MemoryGridEditor<CE, MD> = self.mem_grid.edit();
+        self.chunk_loader.sync(start_tlc, &mut mem_grid_editor, chunks_to_load);
+
+        WorldEditor {
+            mem_grid: mem_grid_editor,
+            metadata: &self.metadata,
         }
     }
-
-    pub fn chunks(&self) -> &Vec<Option<C>> { &self.mem_grid.chunks }
-    pub fn chunks_mut(&mut self) -> &mut Vec<Option<C>> { &mut self.mem_grid.chunks }
 }
-

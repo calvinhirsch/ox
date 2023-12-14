@@ -1,7 +1,8 @@
-use std::ops::Deref;
+use std::marker::PhantomData;
 use derive_new::new;
+use getset::Getters;
 use crate::world::{TLCPos, TLCVector};
-use crate::world::loader::ChunkLoadQueueItem;
+use crate::world::loader::{ChunkLoadQueueItem, ChunkLoadQueueItemData};
 use crate::world::mem_grid::utils::index_for_pos;
 use crate::world::mem_grid::voxel::grid::GlobalVoxelPos;
 
@@ -11,83 +12,72 @@ pub mod utils;
 pub mod voxel;
 
 
-#[derive(new, Clone)]
-pub struct PhysicalMemoryGridStruct<D, MD: MemoryGridMetadata> {
-    pub data: D,
-    pub metadata: MD,
-}
-
-#[derive(new, Clone)]
-pub struct VirtualMemoryGridStruct<C: Placeholder, MD: MemoryGridMetadata> {
-    pub chunks: Vec<Option<C>>,
-    pub metadata: MD
-}
-
-pub trait MemoryGridMetadata {
-    fn size(&self) -> usize;
-    fn start_tlc(&self) -> TLCPos<i64>;
+#[derive(new, Clone, Getters)]
+pub struct MemoryGridEditor<'a, CE, MD> {
+    #[new(default)]
+    pub lifetime: PhantomData<&'a CE>,
+    pub chunks: Vec<Option<CE>>,
+    pub size: usize,
+    pub start_tlc: TLCPos<i64>,
+    #[get = "pub"]
+    metadata: MD,
 }
 
 
-impl<D, MD: MemoryGridMetadata> PhysicalMemoryGridStruct<D, MD> {
-    pub fn deconstruct(self) -> (D, MD) { (self.data, self.metadata) }
-    pub fn size(&self) -> usize { self.metadata.size() }
-    pub fn start_tlc(&self) -> TLCPos<i64> { self.metadata.start_tlc() }
-}
-
-impl<C: Placeholder, MD: MemoryGridMetadata> VirtualMemoryGridStruct<C, MD> {
-    pub fn deconstruct(self) -> (Vec<Option<C>>, MD) { (self.chunks, self.metadata) }
-    pub fn size(&self) -> usize { self.metadata.size() }
-    pub fn start_tlc(&self) -> TLCPos<i64> { self.metadata.start_tlc() }
-
-    pub fn chunk_index(&self, global_tlc_pos: TLCPos<i64>) -> Option<usize> {
+impl<'a, CE, MD> MemoryGridEditor<'a, CE, MD> {
+    pub fn chunk_index_in(global_tlc_pos: TLCPos<i64>, grid_start_tlc: TLCPos<i64>, grid_size: usize) -> Option<usize> {
         Some(
             index_for_pos(
-                (global_tlc_pos.0 - self.start_tlc().0).cast::<usize>()?,
-                self.size(),
+                (global_tlc_pos.0 - grid_start_tlc.0).cast::<usize>()?,
+                grid_size,
             )
         )
     }
 
-    pub fn chunk_for(&self, global_pos: GlobalVoxelPos) -> Option<&C> {
-        self.chunks.get(self.chunk_index(global_pos.tlc)?)?.as_ref()
+    pub fn chunk_index(&self, global_tlc_pos: TLCPos<i64>) -> Option<usize> {
+        Self::chunk_index_in(global_tlc_pos, self.start_tlc, self.size)
     }
 
-    pub fn chunk_for_mut(&mut self, global_pos: GlobalVoxelPos) -> Option<&mut C> {
+    pub fn chunk(&self, global_pos: GlobalVoxelPos) -> Option<&CE> {
+        let idx = self.chunk_index(global_pos.tlc)?;
+        self.chunks.get(idx)?.as_ref()
+    }
+
+    pub fn chunk_mut(&mut self, global_pos: GlobalVoxelPos) -> Option<&mut CE> {
         let idx = self.chunk_index(global_pos.tlc)?;
         self.chunks.get_mut(idx)?.as_mut()
     }
 }
 
 
-pub trait PhysicalMemoryGrid: Deref<Target = PhysicalMemoryGridStruct<Self::Data, Self::Metadata>> + Sized {
-    type Data;
-    type Metadata: MemoryGridMetadata;
-    type ChunkLoadQueueItemData: Clone + Send + 'static;
+pub trait MemoryGrid {
+    type ChunkLoadQueueItemData: ChunkLoadQueueItemData + 'static;
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     fn shift(&mut self, shift: TLCVector<i32>, load_in_from_edge: TLCVector<i32>, load_buffer: [bool; 3]) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
+    fn size(&self) -> usize;
+    fn start_tlc(&self) -> TLCPos<i64>;
 }
 
-
-pub trait ToVirtual<C: Placeholder, MD: MemoryGridMetadata>: PhysicalMemoryGrid {
-    fn to_virtual(self) -> VirtualMemoryGridStruct<C, MD> {
-        let size = self.size();
-        self.to_virtual_for_size(size)
+pub trait EditMemoryGrid<'a, CE, MD>: MemoryGrid {
+    fn edit(&'a mut self) -> MemoryGridEditor<CE, MD> {
+        self.edit_for_size(self.size())
     }
-
-    fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<C, MD>;
-}
-
-pub trait FromVirtual<C: Placeholder, MD: MemoryGridMetadata>: PhysicalMemoryGrid {
-    fn from_virtual(virtual_grid: VirtualMemoryGridStruct<C, MD>) -> Self {
-        let size = virtual_grid.size();
-        Self::from_virtual_for_size(virtual_grid, size)
-    }
-
-    fn from_virtual_for_size(virtual_grid: VirtualMemoryGridStruct<C, MD>, vgrid_size: usize) -> Self;
+    fn edit_for_size(&'a mut self, grid_size: usize) -> MemoryGridEditor<CE, MD>;
 }
 
 
-pub trait Placeholder {
-    fn placeholder(&self) -> Self;
+// pub trait Placeholder {
+//     /// Generate a placeholder that can be swapped in for self
+//     fn placeholder(&self) -> Self;
+// }
+pub trait ChunkCapsule<'a, E: ChunkEditor<'a>> {
+    fn edit(&'a mut self) -> E;
+    fn move_into_chunk(self, dest_chunk_editor: &mut E);
+}
+
+pub trait ChunkEditor<'a>: Sized {
+    type Capsule: ChunkCapsule<'a, Self>;
+
+    /// Generate placeholders for all fields of self, swap them in, and return the original data in a capsule.
+    fn replace_with_placeholder(&mut self) -> Self::Capsule;
 }

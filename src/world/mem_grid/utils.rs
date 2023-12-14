@@ -1,4 +1,4 @@
-use std::ops::Mul;
+use std::ops::{Index, IndexMut, Mul};
 use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 
 pub fn squared<T: Copy + Mul<Output = T>>(x: T) -> T { x * x }
@@ -44,4 +44,41 @@ pub fn index_for_pos_in_tlc(pos_in_tlc: Point3<u32>, chunk_size: usize, n_chunk_
     );
 
     idx
+}
+
+
+
+pub struct IteratorWithIndexing<O: Sized, T: IndexMut<usize, Output=O>> {
+    content: T,
+    len: usize,
+    i: usize,
+}
+
+impl<O: Sized, T: IndexMut<usize, Output=O>> IteratorWithIndexing<O, T> {
+    pub fn new(content: T, len: usize) -> Self {
+        Self {
+            content,
+            len,
+            i: 0,
+        }
+    }
+
+    pub fn apply<F: FnMut(usize, &mut T::Output, &Self)>(&mut self, mut f: F) {
+        for i in 0..self.len {
+            self.i = i;
+            unsafe {
+                let s = self as *const Self;
+                f(i, &mut self.content[i], &*s);
+            }
+        }
+    }
+}
+
+impl<O: Sized, T: IndexMut<usize, Output=O>> Index<usize> for IteratorWithIndexing<O, T> {
+    type Output = O;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        if self.i == index { panic!("Tried to index same element as currently mutably borrowed.") }
+        self.content.index(index)
+    }
 }
