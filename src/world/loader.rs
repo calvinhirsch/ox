@@ -6,7 +6,7 @@ use cgmath::{Array, MetricSpace, Vector3};
 use priority_queue::PriorityQueue;
 use thread_priority::{ThreadBuilderExt, ThreadPriority};
 use crate::world::mem_grid::utils::{index_for_pos};
-use crate::world::mem_grid::{ChunkCapsule, ChunkEditor, MemoryGridEditor};
+use crate::world::mem_grid::{ChunkEditor, MemoryGridEditorTrait};
 use crate::world::TLCPos;
 
 
@@ -32,15 +32,13 @@ pub trait ChunkLoadQueueItemData: Clone + Send {
 }
 
 
-pub trait LoadChunk<'a, QI: ChunkLoadQueueItemData, CE: ChunkEditor<'a>, MD> {
+pub trait LoadChunk<QI: ChunkLoadQueueItemData, MD> {
     fn load_new(&mut self, chunk: ChunkLoadQueueItem<QI>, metadata: MD);
 }
 
 
-pub struct ChunkLoader<'a, QI: ChunkLoadQueueItemData+ 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Send + 'static, MD: Clone + Send + 'static> {
-    chunk_editor_type: PhantomData<CE>,
-    mem_grid_metadata_type: PhantomData<MD>,
-    lt: PhantomData<&'a CE>,
+pub struct ChunkLoader<QI: ChunkLoadQueueItemData+ 'static, C: LoadChunk<QI, MD> + Send + 'static, MD: Clone + Send + 'static> {
+    metadata_type: PhantomData<MD>,
 
     active_threads: Vec<Option<Receiver<(TLCPos<i64>, C)>>>,
     highest_thread_idx: usize,
@@ -51,12 +49,10 @@ pub struct ChunkLoaderParams {
     pub thread_capacity: usize,
 }
 
-impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Clone + Send + 'static> ChunkLoader<'a, QI, CE, C, MD> {
+impl<QI: ChunkLoadQueueItemData+ 'static, C: LoadChunk<QI, MD> + Send + 'static, MD: Clone + Send + 'static> ChunkLoader<QI, C, MD> {
     pub fn new(params: ChunkLoaderParams) -> Self {
         ChunkLoader {
-            chunk_editor_type: PhantomData,
-            mem_grid_metadata_type: PhantomData,
-            lt: PhantomData,
+            metadata_type: PhantomData,
             active_threads: (0..params.thread_capacity).map(|_| None).collect(),
             highest_thread_idx: 0,
             queue: PriorityQueue::new(),
@@ -82,11 +78,13 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>,
             )
         }
     }
+}
 
-    pub fn sync(
+impl<'a, QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Send + 'static, MD: Clone + Send + 'static> ChunkLoader<QI, C, MD> {
+    pub fn sync<CE: ChunkEditor<'a, Capsule = C>>(
         &mut self,
         start_tlc: TLCPos<i64>,
-        editor: &mut MemoryGridEditor<CE, MD>,
+        editor: &mut impl MemoryGridEditorTrait<CE, MD>,
         queue: Vec<ChunkLoadQueueItem<QI>>,
     ) {
         // Receive chunks that have finished loading and put them in "chunks"
@@ -95,8 +93,8 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>,
             if if let Some(receiver) = thread_slot {
                 prev_active = i;
                 if let Ok((pos, chunk_data)) = receiver.try_recv() {
-                    if let Some(index) = ChunkLoader::<QI, CE, C, MD>::grid_index(start_tlc, editor.size, pos) {
-                        chunk_data.move_into_chunk(editor.chunks[index].as_mut().unwrap());
+                    if let Some(index) = ChunkLoader::<QI, C, MD>::grid_index(start_tlc, editor.this().size, pos) {
+                        editor.this_mut().chunks[index].as_mut().unwrap().replace_with_capsule(chunk_data);
                     }
                     true
                 }
@@ -117,8 +115,8 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>,
         // Add new items to queue
         // TODO: if an item's memory overlaps with one already in the queue then figure out what to do
         for item in queue {
-            let priority = (99.99 - (Vector3::from_value(editor.size/2).cast::<f32>().unwrap()
-                .distance((item.pos.0 - start_tlc.0).cast::<f32>().unwrap())) * editor.size as f32 / 50.) as u8;
+            let priority = (99.99 - (Vector3::from_value(editor.this().size/2).cast::<f32>().unwrap()
+                .distance((item.pos.0 - start_tlc.0).cast::<f32>().unwrap())) * editor.this().size as f32 / 50.) as u8;
             self.queue.push(
                 item,
                 priority,
@@ -132,14 +130,14 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>,
                     let (item, priority) = self.queue.pop().unwrap();
                     let (sender, receiver) = sync_channel(0);
 
-                    let grid_index = ChunkLoader::<QI, CE, C, MD>::grid_index(start_tlc, editor.size, item.pos)
+                    let grid_index = ChunkLoader::<QI, C, MD>::grid_index(start_tlc, editor.this().size, item.pos)
                         .expect("A chunk was queued for loading that is not in bounds of current grid.");
 
                     // Create a placeholder for this chunk and swap it into the grid so we can edit
                     // the real one.
-                    let mut chunk = editor.chunks[grid_index].as_mut().unwrap().replace_with_placeholder();
+                    let mut chunk = editor.this_mut().chunks[grid_index].as_mut().unwrap().replace_with_placeholder();
 
-                    let meta = editor.metadata().clone();
+                    let meta = editor.this().metadata().clone();
                     let pos = item.pos;
                     thread::Builder::new()
                         .spawn_with_priority(

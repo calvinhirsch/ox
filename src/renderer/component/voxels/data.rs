@@ -10,7 +10,7 @@ impl VoxelTypeIDs {
     pub const BITS_PER_VOXEL: usize = 8;
 
     pub fn new_vec(n_voxels: usize) -> Vec<Self> {
-        vec![VoxelTypeIDs { indices: [0; 128 / 8] }; n_voxels * Self::BITS_PER_VOXEL / 128]
+        vec![VoxelTypeIDs { indices: [0; 128 / 8] }; (n_voxels * Self::BITS_PER_VOXEL + 127) / 128]
     }
 }
 
@@ -24,7 +24,7 @@ impl VoxelBitmask {
     pub const BITS_PER_VOXEL: usize = 1;
 
     pub fn new_vec(n_voxels: usize) -> Vec<Self> {
-        vec![VoxelBitmask { mask: 0 }; n_voxels * Self::BITS_PER_VOXEL / 128]
+        vec![VoxelBitmask { mask: 0 }; (n_voxels * Self::BITS_PER_VOXEL + 127) / 128]
     }
 }
 

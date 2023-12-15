@@ -6,7 +6,7 @@ use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::world::mem_grid::layer::{MemoryGridLayer};
 use crate::world::mem_grid::utils::cubed;
 use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxels};
-use crate::world::mem_grid::{EditMemoryGrid, MemoryGrid, MemoryGridEditor, ChunkEditor, ChunkCapsule};
+use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, ChunkEditor, NewMemoryGridEditor};
 use crate::world::{TLCPos, TLCVector};
 use std::sync::Arc;
 use getset::Getters;
@@ -41,7 +41,7 @@ impl VoxelMemoryGridLOD {
         tlc_size: usize,
         buffer_allocator: Arc<dyn MemoryAllocator>,
     ) -> (Self, RendererVoxelLOD) {
-        let bitmask =vec![ChunkBitmask::new_blank(voxels_per_tlc); cubed(params.size)] ;
+        let bitmask = vec![ChunkBitmask::new_blank(voxels_per_tlc); cubed(params.size)] ;
         let voxels = params.voxel_type_ids_binding.map(|_| vec![ChunkVoxels::new_blank(voxels_per_tlc); cubed(params.size)]);
         let lod = RendererVoxelLOD::new(
             bitmask.iter().map(|c| &c.bitmask).flatten().copied().collect::<Vec<_>>().into_iter(),  // ENHANCEMENT: Do this better (and below)
@@ -171,25 +171,66 @@ impl MemoryGrid for VoxelMemoryGridLOD {
     fn start_tlc(&self) -> TLCPos<i64> { self.bitmask_layer.start_tlc() }
 }
 
-impl<'a, VE: VoxelTypeEnum> EditMemoryGrid<'a, VoxelLODChunkEditor<'a, VE>, ()> for VoxelMemoryGridLOD {
-    fn edit_for_size(&'a mut self, grid_size: usize) -> MemoryGridEditor<VoxelLODChunkEditor<'a, VE>, ()> {
+// impl<'a, VE: VoxelTypeEnum> EditMemoryGrid<VoxelLODChunkEditor<'a, VE>, ()> for VoxelMemoryGridLOD {
+//     fn edit_for_size(&mut self, grid_size: usize) -> MemoryGridEditor<VoxelLODChunkEditor<'a, VE>, ()> {
+//         // ENHANCEMENT: Make this call .to_virtual_for_size(self.size()) on children instead of
+//         // use grid_size and then add the necessary padding in this function.
+//
+//         let bitmask_editor = self.bitmask_layer
+//             .edit_for_size(grid_size);
+//
+//         let voxel_editor: Option<MemoryGridEditor<&mut ChunkVoxels, ()>> =
+//             self.voxel_layer.as_mut().map(|l| l.edit_for_size(grid_size));
+//
+//         let regions_editor = self.updated_bitmask_regions_layer
+//             .edit_for_size(grid_size);
+//
+//         let size = bitmask_editor.size;
+//         let start_tlc = bitmask_editor.start_tlc;
+//
+//         MemoryGridEditor {
+//             // lifetime: PhantomData,
+//             chunks: bitmask_editor.chunks.into_iter()
+//                 .zip(
+//                     match voxel_editor {
+//                         None => (0..cubed(size)).map(|_| None).collect::<Vec<_>>(),
+//                         Some(l) => l.chunks.into_iter().collect(),
+//                     }
+//                 ).zip(regions_editor.chunks)
+//                 .map(|((bm_o, vid), regions)|
+//                     bm_o.map(|bm|
+//                         VoxelLODChunkEditor {
+//                             voxel_type_enum: PhantomData,
+//                             voxels: vid,
+//                             bitmask: bm,
+//                             updated_bitmask_regions: regions.unwrap(),
+//                         }
+//                     )
+//                 ).collect(),
+//             size,
+//             start_tlc,
+//             metadata: (),
+//         }
+//     }
+// }
+
+impl<'a, VE: VoxelTypeEnum> NewMemoryGridEditor<'a, VoxelMemoryGridLOD> for MemoryGridEditor<VoxelLODChunkEditor<'a, VE>, ()> {
+    fn for_grid_with_size(mem_grid: &'a mut VoxelMemoryGridLOD, grid_size: usize) -> Self {
         // ENHANCEMENT: Make this call .to_virtual_for_size(self.size()) on children instead of
         // use grid_size and then add the necessary padding in this function.
 
-        let bitmask_editor = self.bitmask_layer
-            .edit_for_size(grid_size);
+        let bitmask_editor = MemoryGridEditor::for_grid_with_size(&mut mem_grid.bitmask_layer, grid_size);
 
         let voxel_editor: Option<MemoryGridEditor<&mut ChunkVoxels, ()>> =
-            self.voxel_layer.as_mut().map(|l| l.edit_for_size(grid_size));
+            mem_grid.voxel_layer.as_mut().map(|l| MemoryGridEditor::for_grid_with_size(l, grid_size));
 
-        let regions_editor = self.updated_bitmask_regions_layer
-            .edit_for_size(grid_size);
+        let regions_editor = MemoryGridEditor::for_grid_with_size(&mut mem_grid.updated_bitmask_regions_layer, grid_size);
 
         let size = bitmask_editor.size;
         let start_tlc = bitmask_editor.start_tlc;
 
         MemoryGridEditor {
-            lifetime: PhantomData,
+            // lifetime: PhantomData,
             chunks: bitmask_editor.chunks.into_iter()
                 .zip(
                     match voxel_editor {
@@ -232,25 +273,18 @@ pub struct VoxelLODChunkCapsule {
     updated_bitmask_regions: Vec<BufferCopy>
 }
 
-impl<'a, VE: VoxelTypeEnum> ChunkCapsule<'a, VoxelLODChunkEditor<'a, VE>> for VoxelLODChunkCapsule {
-    fn edit(&'a mut self) -> VoxelLODChunkEditor<'a, VE> {
-        VoxelLODChunkEditor {
-            voxel_type_enum: PhantomData,
-            voxels: (&mut self.voxels).as_mut(),
-            bitmask: &mut self.bitmask,
-            updated_bitmask_regions: &mut self.updated_bitmask_regions,
-        }
-    }
-
-    fn move_into_chunk(self, dest_chunk_editor: &mut VoxelLODChunkEditor<VE>) {
-        dest_chunk_editor.voxels.as_mut().map(|v| **v = self.voxels.unwrap());
-        *dest_chunk_editor.bitmask = self.bitmask;
-        *dest_chunk_editor.updated_bitmask_regions = self.updated_bitmask_regions;
-    }
-}
 
 impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
     type Capsule = VoxelLODChunkCapsule;
+
+    fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self {
+        VoxelLODChunkEditor {
+            voxel_type_enum: PhantomData,
+            voxels: capsule.voxels.as_mut(),
+            bitmask: &mut capsule.bitmask,
+            updated_bitmask_regions: &mut capsule.updated_bitmask_regions,
+        }
+    }
 
     fn replace_with_placeholder(&mut self) -> VoxelLODChunkCapsule {
         VoxelLODChunkCapsule {
@@ -258,6 +292,12 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
             bitmask: self.bitmask.replace_with_placeholder(),
             updated_bitmask_regions: mem::take(self.updated_bitmask_regions),
         }
+    }
+
+    fn replace_with_capsule(&mut self, capsule: Self::Capsule) {
+        self.voxels.as_mut().map(|v| **v = capsule.voxels.unwrap());
+        *self.bitmask = capsule.bitmask;
+        *self.updated_bitmask_regions = capsule.updated_bitmask_regions;
     }
 }
 

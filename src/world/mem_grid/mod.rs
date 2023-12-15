@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use derive_new::new;
 use getset::Getters;
 use crate::world::{TLCPos, TLCVector};
@@ -13,18 +12,24 @@ pub mod voxel;
 
 
 #[derive(new, Clone, Getters)]
-pub struct MemoryGridEditor<'a, CE, MD> {
-    #[new(default)]
-    pub lifetime: PhantomData<&'a CE>,
+pub struct MemoryGridEditor<CE, MD> {
     pub chunks: Vec<Option<CE>>,
     pub size: usize,
     pub start_tlc: TLCPos<i64>,
     #[get = "pub"]
     metadata: MD,
 }
+pub trait MemoryGridEditorTrait<CE, MD> {
+    fn this(&self) -> &MemoryGridEditor<CE, MD>;
+    fn this_mut(&mut self) -> &mut MemoryGridEditor<CE, MD>;
+}
+impl<CE, MD> MemoryGridEditorTrait<CE, MD> for MemoryGridEditor<CE, MD> {
+    fn this(&self) -> &MemoryGridEditor<CE, MD> { self }
+    fn this_mut(&mut self) -> &mut MemoryGridEditor<CE, MD> { self }
+}
 
 
-impl<'a, CE, MD> MemoryGridEditor<'a, CE, MD> {
+impl<CE, MD> MemoryGridEditor<CE, MD> {
     pub fn chunk_index_in(global_tlc_pos: TLCPos<i64>, grid_start_tlc: TLCPos<i64>, grid_size: usize) -> Option<usize> {
         Some(
             index_for_pos(
@@ -49,6 +54,14 @@ impl<'a, CE, MD> MemoryGridEditor<'a, CE, MD> {
     }
 }
 
+pub trait NewMemoryGridEditor<'a, MG: MemoryGrid>: Sized {
+    fn for_grid(mem_grid: &'a mut MG) -> Self {
+        let size = mem_grid.size();
+        Self::for_grid_with_size(mem_grid, size)
+    }
+    fn for_grid_with_size(mem_grid: &'a mut MG, grid_size: usize) -> Self;
+}
+
 
 pub trait MemoryGrid {
     type ChunkLoadQueueItemData: ChunkLoadQueueItemData + 'static;
@@ -58,26 +71,21 @@ pub trait MemoryGrid {
     fn start_tlc(&self) -> TLCPos<i64>;
 }
 
-pub trait EditMemoryGrid<'a, CE, MD>: MemoryGrid {
-    fn edit(&'a mut self) -> MemoryGridEditor<CE, MD> {
-        self.edit_for_size(self.size())
-    }
-    fn edit_for_size(&'a mut self, grid_size: usize) -> MemoryGridEditor<CE, MD>;
-}
-
-
-// pub trait Placeholder {
-//     /// Generate a placeholder that can be swapped in for self
-//     fn placeholder(&self) -> Self;
+// pub trait EditMemoryGrid<CE, MD>: MemoryGrid {
+//     fn edit(&mut self) -> MemoryGridEditor<CE, MD> {
+//         self.edit_for_size(self.size())
+//     }
+//     fn edit_for_size(&mut self, grid_size: usize) -> MemoryGridEditor<CE, MD>;
 // }
-pub trait ChunkCapsule<'a, E: ChunkEditor<'a>> {
-    fn edit(&'a mut self) -> E;
-    fn move_into_chunk(self, dest_chunk_editor: &mut E);
-}
+
 
 pub trait ChunkEditor<'a>: Sized {
-    type Capsule: ChunkCapsule<'a, Self>;
+    type Capsule: 'static;
+
+    fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self;
 
     /// Generate placeholders for all fields of self, swap them in, and return the original data in a capsule.
     fn replace_with_placeholder(&mut self) -> Self::Capsule;
+
+    fn replace_with_capsule(&mut self, capsule: Self::Capsule);
 }

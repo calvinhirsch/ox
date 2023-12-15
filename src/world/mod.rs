@@ -11,7 +11,7 @@ pub mod loader;
 
 use camera::{Camera, controller::CameraController};
 use crate::world::loader::{ChunkLoader, ChunkLoadQueueItem, ChunkLoadQueueItemData, LoadChunk};
-use crate::world::mem_grid::{ChunkCapsule, ChunkEditor, EditMemoryGrid, MemoryGrid, MemoryGridEditor};
+use crate::world::mem_grid::{ChunkEditor, MemoryGrid, MemoryGridEditorTrait, NewMemoryGridEditor};
 
 /// Position in units of top level chunks
 #[derive(Clone, Copy, Debug)]
@@ -36,19 +36,20 @@ pub struct WorldMetadata {
     buffer_chunk_states: [BufferChunkState; 3],
 }
 
-pub struct World<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> {
-    grid_meta_type: PhantomData<MD>,
-    chunk_editor_type: PhantomData<CE>,
+pub struct World<QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI> + 'static> {
+    metadata_type: PhantomData<MD>,
 
     pub mem_grid: MG,
-    chunk_loader: ChunkLoader<'a, MG::ChunkLoadQueueItemData, CE, C, MD>,
+    chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, C, MD>,
     chunks_to_load: Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>>,
     camera: Camera,
     metadata: WorldMetadata,
 }
 
-pub struct WorldEditor<'a, CE: ChunkEditor<'a>, MD: Clone> {
-    pub mem_grid: MemoryGridEditor<'a, CE, MD>,
+pub struct WorldEditor<'a, CE: ChunkEditor<'a>, MD: Clone, E: MemoryGridEditorTrait<CE, MD>> {
+    chunk_editor_type: PhantomData<CE>,
+    mem_grid_editor_metadata_type: PhantomData<MD>,
+    pub mem_grid: E,
     pub metadata: &'a WorldMetadata,
 }
 
@@ -60,17 +61,16 @@ pub enum BufferChunkState {
 }
 
 
-impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> World<'a, QI, CE, C, MD, MG> {
+impl<QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI> + 'static> World<QI, C, MD, MG> {
     pub fn new(
         mem_grid: MG,
-        chunk_loader: ChunkLoader<'a, MG::ChunkLoadQueueItemData, CE, C, MD>,
+        chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, C, MD>,
         camera: Camera,
         tlc_size: usize,
         tlc_load_dist_thresh: u32,
     ) -> Self {
         World {
-            grid_meta_type: PhantomData,
-            chunk_editor_type: PhantomData,
+            metadata_type: PhantomData,
             mem_grid,
             chunk_loader,
             chunks_to_load: vec![],
@@ -135,27 +135,21 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>,
             if move_vector[a] == 0 {
                 if cam_delta[a] > 0. {
                     load_buffer[a] = within_upper_load_thresh && buffer_chunk_state != BufferChunkState::LoadedUpper;
-                }
-                else {
+                } else {
                     load_buffer[a] = within_lower_load_thresh && buffer_chunk_state != BufferChunkState::LoadedLower;
                 }
-            }
-            else {
+            } else {
                 // Load number of chunks in this direction equal to the number we traveled, minus
                 // one if we had already loaded one of them in this direction
                 let loaded_one_already = buffer_chunk_state == (
-                    if move_vector[a] > 0 { BufferChunkState::LoadedUpper }
-                    else { BufferChunkState::LoadedLower }
+                    if move_vector[a] > 0 { BufferChunkState::LoadedUpper } else { BufferChunkState::LoadedLower }
                 );
                 load_in_from_edge.0[a] = move_vector[a] - loaded_one_already as i64;
 
                 (self.metadata.buffer_chunk_states[a], load_buffer[a]) = {
                     if move_vector[a] > 0 {
-                        if within_upper_load_thresh { (BufferChunkState::LoadedUpper, true) }
-                        else { (BufferChunkState::LoadedLower, false) }
-                    }
-                    else if within_lower_load_thresh { (BufferChunkState::LoadedLower, true) }
-                    else { (BufferChunkState::LoadedUpper, false) }
+                        if within_upper_load_thresh { (BufferChunkState::LoadedUpper, true) } else { (BufferChunkState::LoadedLower, false) }
+                    } else if within_lower_load_thresh { (BufferChunkState::LoadedLower, true) } else { (BufferChunkState::LoadedUpper, false) }
                 };
             }
         }
@@ -174,16 +168,18 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>,
     }
 }
 
-
-impl<'a, QI: ChunkLoadQueueItemData + 'static, CE: ChunkEditor<'a, Capsule = C>, C: ChunkCapsule<'a, CE> + LoadChunk<'a, QI, CE, MD> + Clone + Send + 'static, MD: Default + Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI> + EditMemoryGrid<'a, CE, MD>> World<'a, QI, CE, C, MD, MG> {
-    pub fn edit(&'a mut self) -> WorldEditor<'a, CE, MD> {
+impl<QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Send + 'static, MD: Clone + Send + 'static, MG: MemoryGrid<ChunkLoadQueueItemData = QI> + 'static> World<QI, C, MD, MG> {
+    pub fn edit<'a, CE: ChunkEditor<'a, Capsule = C>, E: MemoryGridEditorTrait<CE, MD> + NewMemoryGridEditor<'a, MG>>(&'a mut self) -> WorldEditor<'a, CE, MD, E> {
         // Sync with chunk loader and queue new chunks to load
         let start_tlc = self.mem_grid.start_tlc();
         let chunks_to_load = mem::take(&mut self.chunks_to_load);
-        let mut mem_grid_editor: MemoryGridEditor<CE, MD> = self.mem_grid.edit();
+        let mut mem_grid_editor = E::for_grid(&mut self.mem_grid);
+        dbg!(mem_grid_editor.this().chunks.len());
         self.chunk_loader.sync(start_tlc, &mut mem_grid_editor, chunks_to_load);
 
         WorldEditor {
+            chunk_editor_type: PhantomData,
+            mem_grid_editor_metadata_type: PhantomData,
             mem_grid: mem_grid_editor,
             metadata: &self.metadata,
         }

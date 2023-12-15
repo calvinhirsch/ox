@@ -1,10 +1,9 @@
-use std::marker::PhantomData;
 use std::sync::Arc;
 use cgmath::{Array, EuclideanSpace, Vector3};
 use getset::Getters;
 use super::lod::{VoxelLODChunkCapsule, VoxelLODChunkEditor, VoxelLODCreateParams, VoxelMemoryGridLOD};
 use crate::renderer::component::voxels::VoxelData;
-use crate::world::mem_grid::{EditMemoryGrid, MemoryGrid, MemoryGridEditor, ChunkEditor, ChunkCapsule};
+use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, ChunkEditor, NewMemoryGridEditor};
 use crate::world::{TLCPos, TLCVector, VoxelPos};
 use hashbrown::{HashMap};
 use vulkano::memory::allocator::MemoryAllocator;
@@ -173,18 +172,44 @@ impl MemoryGrid for VoxelMemoryGrid {
     fn start_tlc(&self) -> TLCPos<i64> { self.largest_lod().start_tlc() }
 }
 
-impl<'a, VE: VoxelTypeEnum> EditMemoryGrid<'a, ChunkVoxelEditor<'a, VE>, &'a VoxelMemoryGridMetadata> for VoxelMemoryGrid {
-    fn edit_for_size(&'a mut self, grid_size: usize) -> MemoryGridEditor<ChunkVoxelEditor<'a, VE>, &'a VoxelMemoryGridMetadata> {
-        let size = self.size();
-        let start_tlc = self.start_tlc();
-        let chunk_iters = self.lods.iter_mut().map(|lvl_lods|
+// impl<'a, VE: VoxelTypeEnum> EditMemoryGrid<ChunkVoxelEditor<'a, VE>, &'a VoxelMemoryGridMetadata> for VoxelMemoryGrid {
+//     fn edit_for_size(&mut self, grid_size: usize) -> MemoryGridEditor<ChunkVoxelEditor<'a, VE>, &'a VoxelMemoryGridMetadata> {
+//         let size = self.size();
+//         let start_tlc = self.start_tlc();
+//         let chunk_iters = self.lods.iter_mut().map(|lvl_lods|
+//             lvl_lods.iter_mut().map(|lod_o|
+//                 lod_o.as_mut().map(|lod| lod.edit_for_size(grid_size).chunks.into_iter())
+//             ).collect()
+//         ).collect();
+//
+//         MemoryGridEditor {
+//             // lifetime: PhantomData,
+//             chunks: LODSplitter(chunk_iters).map(|chunk_lods|
+//                 Some(
+//                     ChunkVoxelEditor {
+//                         lods: chunk_lods,
+//                     }
+//                 )
+//             ).collect(),
+//             size,
+//             start_tlc,
+//             metadata: &self.metadata,
+//         }
+//     }
+// }
+
+impl<'a, VE: VoxelTypeEnum> NewMemoryGridEditor<'a, VoxelMemoryGrid> for MemoryGridEditor<ChunkVoxelEditor<'a, VE>, VoxelMemoryGridMetadata> {
+    fn for_grid_with_size(mem_grid: &'a mut VoxelMemoryGrid, grid_size: usize) -> Self {
+        let size = mem_grid.size();
+        let start_tlc = mem_grid.start_tlc();
+        let chunk_iters = mem_grid.lods.iter_mut().map(|lvl_lods|
             lvl_lods.iter_mut().map(|lod_o|
-                lod_o.as_mut().map(|lod| lod.edit_for_size(grid_size).chunks.into_iter())
+                lod_o.as_mut().map(|lod| MemoryGridEditor::for_grid_with_size(lod, grid_size).chunks.into_iter())
             ).collect()
         ).collect();
 
         MemoryGridEditor {
-            lifetime: PhantomData,
+            // lifetime: PhantomData,
             chunks: LODSplitter(chunk_iters).map(|chunk_lods|
                 Some(
                     ChunkVoxelEditor {
@@ -194,7 +219,7 @@ impl<'a, VE: VoxelTypeEnum> EditMemoryGrid<'a, ChunkVoxelEditor<'a, VE>, &'a Vox
             ).collect(),
             size,
             start_tlc,
-            metadata: &self.metadata,
+            metadata: mem_grid.metadata.clone(),
         }
     }
 }
@@ -225,35 +250,18 @@ pub struct ChunkVoxelCapsule {
 }
 
 
+impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for ChunkVoxelEditor<'a, VE> {
+    type Capsule = ChunkVoxelCapsule;
 
-impl<'a, VE: VoxelTypeEnum> ChunkCapsule<'a, ChunkVoxelEditor<'a, VE>> for ChunkVoxelCapsule {
-    fn edit(&'a mut self) -> ChunkVoxelEditor<'a, VE> {
+    fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self {
         ChunkVoxelEditor {
-            lods: self.lods.iter_mut().map(|lvl|
+            lods: capsule.lods.iter_mut().map(|lvl|
                 lvl.iter_mut().map(|lod|
-                    lod.as_mut().map(|l| l.edit())
+                    lod.as_mut().map(VoxelLODChunkEditor::new_from_capsule)
                 ).collect()
             ).collect()
         }
     }
-
-    fn move_into_chunk(self, dest_chunk_editor: &mut ChunkVoxelEditor<'a, VE>) {
-        for (dest_lvl, lvl) in dest_chunk_editor.lods.iter_mut().zip(self.lods.into_iter()) {
-            for (dest_lod, lod) in dest_lvl.iter_mut().zip(lvl.into_iter()) {
-                match (dest_lod.as_mut(), lod) {
-                    (None, None) => {},
-                    (Some(dest_l), Some(l)) => {
-                        l.move_into_chunk(dest_l);
-                    }
-                    _ => { panic!("Internal error: chunks not aligned") }
-                }
-            }
-        }
-    }
-}
-
-impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for ChunkVoxelEditor<'a, VE> {
-    type Capsule = ChunkVoxelCapsule;
 
     fn replace_with_placeholder(&mut self) -> ChunkVoxelCapsule {
         ChunkVoxelCapsule {
@@ -262,6 +270,20 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for ChunkVoxelEditor<'a, VE> {
                     lod_o.as_mut().map(|lod| lod.replace_with_placeholder())
                 ).collect()
             ).collect()
+        }
+    }
+
+    fn replace_with_capsule(&mut self, capsule: Self::Capsule) {
+        for (dest_lvl, lvl) in self.lods.iter_mut().zip(capsule.lods.into_iter()) {
+            for (dest_lod, lod) in dest_lvl.iter_mut().zip(lvl.into_iter()) {
+                match (dest_lod.as_mut(), lod) {
+                    (None, None) => {},
+                    (Some(dest_l), Some(l)) => {
+                        dest_l.replace_with_capsule(l);
+                    }
+                    _ => { panic!("Internal error: chunks not aligned") }
+                }
+            }
         }
     }
 }

@@ -1,6 +1,5 @@
-use std::marker::PhantomData;
 use crate::world::mem_grid::utils::{amod, pos_for_index, index_for_pos};
-use crate::world::mem_grid::{EditMemoryGrid, MemoryGrid, MemoryGridEditor};
+use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, NewMemoryGridEditor};
 use crate::world::{TLCPos, TLCVector};
 use cgmath::{Array, EuclideanSpace, Vector3, Point3};
 use getset::{Getters, MutGetters};
@@ -179,31 +178,65 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
     fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
-impl<'a, C: 'static, CE: From<&'a mut C>> EditMemoryGrid<'a, CE, ()> for MemoryGridLayer<C> {
-    fn edit_for_size(&'a mut self, grid_size: usize) -> MemoryGridEditor<CE, ()> {
 
+// impl<'a, C: 'static, CE: From<&'a mut C>> EditMemoryGrid<CE, ()> for MemoryGridLayer<C> {
+//     fn edit_for_size(&mut self, grid_size: usize) -> MemoryGridEditor<CE, ()> {
+//
+//         let vgrid_size = grid_size - 1;
+//         let mut vgrid: Vec<Option<CE>> = (0..vgrid_size.pow(3)).map(|_| None).collect();
+//
+//         // If this layer is smaller than full grid, add padding to virtual position so it
+//         // is centered
+//         let virtual_positions: Vec<_> = (0..grid_size).map(|i|
+//            self.virtual_grid_pos_for_grid_pos(
+//                TLCVector(pos_for_index(i, self.size)),
+//                vgrid_size,
+//            )
+//         ).collect();
+//
+//         for (chunk_data, virtual_pos) in self.chunks.iter_mut()
+//             .zip(virtual_positions) {
+//             vgrid[index_for_pos(virtual_pos.0, vgrid_size)] = Some(CE::from(chunk_data));
+//         }
+//
+//         MemoryGridEditor {
+//             // lifetime: PhantomData,
+//             chunks: vgrid,
+//             size: self.size,
+//             start_tlc: self.start_tlc,
+//             metadata: (),
+//         }
+//     }
+// }
+
+
+// #[derive(Deref, DerefMut)]
+// pub struct MemoryGridLayerEditor<CE>(MemoryGridEditorData<CE, ()>);
+
+impl<'a, C: 'static, CE: From<&'a mut C>> NewMemoryGridEditor<'a, MemoryGridLayer<C>> for MemoryGridEditor<CE, ()> {
+    fn for_grid_with_size(mem_grid: &'a mut MemoryGridLayer<C>, grid_size: usize) -> Self {
         let vgrid_size = grid_size - 1;
         let mut vgrid: Vec<Option<CE>> = (0..vgrid_size.pow(3)).map(|_| None).collect();
 
         // If this layer is smaller than full grid, add padding to virtual position so it
         // is centered
         let virtual_positions: Vec<_> = (0..grid_size).map(|i|
-           self.virtual_grid_pos_for_grid_pos(
-               TLCVector(pos_for_index(i, self.size)),
-               vgrid_size,
-           )
+            mem_grid.virtual_grid_pos_for_grid_pos(
+                TLCVector(pos_for_index(i, mem_grid.size)),
+                vgrid_size,
+            )
         ).collect();
 
-        for (chunk_data, virtual_pos) in self.chunks.iter_mut()
+        for (chunk_data, virtual_pos) in mem_grid.chunks.iter_mut()
             .zip(virtual_positions) {
             vgrid[index_for_pos(virtual_pos.0, vgrid_size)] = Some(CE::from(chunk_data));
         }
 
         MemoryGridEditor {
-            lifetime: PhantomData,
+            // lifetime: PhantomData,
             chunks: vgrid,
-            size: self.size,
-            start_tlc: self.start_tlc,
+            size: mem_grid.size,
+            start_tlc: mem_grid.start_tlc,
             metadata: (),
         }
     }
