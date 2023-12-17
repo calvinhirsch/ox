@@ -1,6 +1,8 @@
 use std::mem;
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use std::ops::{Index, IndexMut};
+use vulkano::command_buffer::BufferCopy;
+use crate::world::mem_grid::Placeholder;
 
 
 #[derive(Clone, Debug)]
@@ -30,8 +32,9 @@ impl ChunkVoxels {
         }
     }
     pub fn n_voxels(&self) -> usize { self.ids.len() * 128 / VoxelTypeIDs::BITS_PER_VOXEL }
-
-    pub fn replace_with_placeholder(&mut self) -> Self {
+}
+impl Placeholder for ChunkVoxels {
+    fn replace_with_placeholder(&mut self) -> Self {
         let loaded = self.loaded;
         self.loaded = false;
 
@@ -40,7 +43,12 @@ impl ChunkVoxels {
             loaded,
         }
     }
+
+    fn is_placeholder(&self) -> bool {
+        return !self.loaded && self.ids.len() == 0
+    }
 }
+
 
 #[derive(Clone, Debug)]
 pub struct ChunkBitmask{
@@ -57,16 +65,6 @@ impl ChunkBitmask {
     }
 
     pub fn n_voxels(&self) -> usize { self.bitmask.len() * 128 / VoxelBitmask::BITS_PER_VOXEL }
-
-    pub fn replace_with_placeholder(&mut self) -> Self {
-        let loaded = self.loaded;
-        self.loaded = false;
-
-        Self {
-            bitmask: mem::replace(&mut self.bitmask, vec![]),
-            loaded,
-        }
-    }
 
     pub fn get(&self, index: usize) -> bool {
         let bit = 1u128.to_le() << (index % 128);
@@ -90,5 +88,50 @@ impl ChunkBitmask {
     pub fn set_block_false(&mut self, index: usize) {
         let bit = 1u128.to_le() << (index % 128);
         self.bitmask[index / 128].mask &= !bit;
+    }
+}
+impl Placeholder for ChunkBitmask {
+    fn replace_with_placeholder(&mut self) -> Self {
+        let loaded = self.loaded;
+        self.loaded = false;
+
+        Self {
+            bitmask: mem::replace(&mut self.bitmask, vec![]),
+            loaded,
+        }
+    }
+
+    fn is_placeholder(&self) -> bool {
+        return !self.loaded && self.bitmask.len() == 0
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct ChunkUpdateRegions {
+    pub regions: Vec<BufferCopy>,
+    pub loaded: bool,
+}
+impl ChunkUpdateRegions {
+    pub fn new() -> Self {
+        ChunkUpdateRegions {
+            regions: vec![],
+            loaded: false,
+        }
+    }
+}
+impl Placeholder for ChunkUpdateRegions {
+    fn replace_with_placeholder(&mut self) -> Self {
+        let loaded = self.loaded;
+        self.loaded = false;
+
+        Self {
+            regions: vec![],
+            loaded,
+        }
+    }
+
+    fn is_placeholder(&self) -> bool {
+        return !self.loaded && self.regions.len() == 0
     }
 }

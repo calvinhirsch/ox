@@ -1,10 +1,9 @@
-use std::sync::mpsc::{Receiver, sync_channel};
-use std::{thread};
+use std::sync::mpsc::{Receiver, sync_channel, TryRecvError};
+use std::{mem, thread};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use cgmath::{Array, MetricSpace, Vector3};
 use priority_queue::PriorityQueue;
-use thread_priority::{ThreadBuilderExt, ThreadPriority};
 use crate::world::mem_grid::utils::{index_for_pos};
 use crate::world::mem_grid::{ChunkEditor, MemoryGridEditorTrait};
 use crate::world::TLCPos;
@@ -41,21 +40,21 @@ pub struct ChunkLoader<QI: ChunkLoadQueueItemData+ 'static, C: LoadChunk<QI, MD>
     metadata_type: PhantomData<MD>,
 
     active_threads: Vec<Option<Receiver<(TLCPos<i64>, C)>>>,
-    highest_thread_idx: usize,
-    queue: PriorityQueue<ChunkLoadQueueItem<QI>, u8>,
+    queue: PriorityQueue<ChunkLoadQueueItem<QI>, u32>,
+    requeue: Vec<ChunkLoadQueueItem<QI>>,
 }
 
 pub struct ChunkLoaderParams {
-    pub thread_capacity: usize,
+    pub n_threads: usize,
 }
 
 impl<QI: ChunkLoadQueueItemData+ 'static, C: LoadChunk<QI, MD> + Send + 'static, MD: Clone + Send + 'static> ChunkLoader<QI, C, MD> {
     pub fn new(params: ChunkLoaderParams) -> Self {
         ChunkLoader {
             metadata_type: PhantomData,
-            active_threads: (0..params.thread_capacity).map(|_| None).collect(),
-            highest_thread_idx: 0,
+            active_threads: (0..params.n_threads).map(|_| None).collect(),
             queue: PriorityQueue::new(),
+            requeue: vec![],
         }
     }
 
@@ -88,73 +87,85 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Se
         queue: Vec<ChunkLoadQueueItem<QI>>,
     ) {
         // Receive chunks that have finished loading and put them in "chunks"
-        let mut prev_active = 0;
-        for (i, thread_slot) in self.active_threads.iter_mut().enumerate() {
+        for thread_slot in self.active_threads.iter_mut() {
             if if let Some(receiver) = thread_slot {
-                prev_active = i;
-                if let Ok((pos, chunk_data)) = receiver.try_recv() {
-                    if let Some(index) = ChunkLoader::<QI, C, MD>::grid_index(start_tlc, editor.this().size, pos) {
-                        editor.this_mut().chunks[index].as_mut().unwrap().replace_with_capsule(chunk_data);
-                    }
-                    true
+                match receiver.try_recv() {
+                    Ok((pos, chunk_data)) => {
+                        if let Some(index) = ChunkLoader::<QI, C, MD>::grid_index(start_tlc, editor.this().size, pos) {
+                            let editor = editor.this_mut().chunks[index].as_mut().unwrap();
+                            debug_assert!(editor.ok_to_replace_with_capsule());
+                            editor.replace_with_capsule(chunk_data);
+                        }
+                        true
+                    },
+                    Err(TryRecvError::Disconnected) => { panic!("Thread disconnected before completing.") },
+                    Err(TryRecvError::Empty) => { false }
                 }
-                else { false }
             }
             else { false } {
-                // Finished with this thread, set its entry to None and update highest_thread_idx
-                // if this was previously the highest.
+                // Finished with this thread, set its entry to None
                 *thread_slot = None;
-                if self.highest_thread_idx <= i {
-                    self.highest_thread_idx = prev_active;
-                }
             }
-
-            if i >= self.highest_thread_idx { break; }
         }
 
+        let grid_size = editor.this().size;
+        let priority = |chunk_pos: TLCPos<i64>| -> u32 {
+            u32::MAX - (Vector3::from_value(grid_size as f32 / 2.).cast::<f32>().unwrap()
+                .distance((chunk_pos.0 - start_tlc.0).cast::<f32>().unwrap()) * grid_size as f32) as u32
+        };
+
+        let editor_chunk_i = |pos| ChunkLoader::<QI, C, MD>::grid_index(start_tlc, grid_size, pos);
+
         // Add new items to queue
-        // TODO: if an item's memory overlaps with one already in the queue then figure out what to do
         for item in queue {
-            let priority = (99.99 - (Vector3::from_value(editor.this().size/2).cast::<f32>().unwrap()
-                .distance((item.pos.0 - start_tlc.0).cast::<f32>().unwrap())) * editor.this().size as f32 / 50.) as u8;
-            self.queue.push(
-                item,
-                priority,
-            );
+            let pos = item.pos;
+            if let Some(Some(editor_chunk)) = editor_chunk_i(pos).map(|i| editor.this_mut().chunks[i].as_mut()) {
+                editor_chunk.prep_for_reload();
+            }
+            self.queue.push(item, priority(pos));
         }
 
         // Enqueue new chunks for loading until queue is empty or there are no thread slots left
+        // ENHANCEMENT: When about to queue a chunk, check that it is still relevant to load.
         if !self.queue.is_empty() {
-            for (i, thread_slot) in self.active_threads.iter_mut().enumerate() {
+            for thread_slot in self.active_threads.iter_mut() {
                 if thread_slot.is_none() {
-                    let (item, priority) = self.queue.pop().unwrap();
+                    let (item, _) = self.queue.pop().unwrap();
                     let (sender, receiver) = sync_channel(0);
 
-                    let grid_index = ChunkLoader::<QI, C, MD>::grid_index(start_tlc, editor.this().size, item.pos)
-                        .expect("A chunk was queued for loading that is not in bounds of current grid.");
+                    if let Some(Some(editor_chunk)) = editor_chunk_i(item.pos)
+                        .map(|i| editor.this_mut().chunks[i].as_mut()) {
 
-                    // Create a placeholder for this chunk and swap it into the grid so we can edit
-                    // the real one.
-                    let mut chunk = editor.this_mut().chunks[grid_index].as_mut().unwrap().replace_with_placeholder();
+                        if editor_chunk.ok_to_load() {
 
-                    let meta = editor.this().metadata().clone();
-                    let pos = item.pos;
-                    thread::Builder::new()
-                        .spawn_with_priority(
-                            ThreadPriority::Crossplatform(priority.try_into().unwrap()),
-                            move |result| {
-                                result.expect("Failed to set thread priority.");
+                            // Create a placeholder for this chunk and swap it into the grid so we can edit
+                            // the real one.
+                            let mut chunk = editor_chunk.replace_with_placeholder();
+                            let meta = editor.this().metadata().clone();
+                            let pos = item.pos;
+                            thread::spawn(move || {
                                 chunk.load_new(item, meta);
-                                sender.send((pos, chunk)).unwrap();
-                            }
-                        ).unwrap();
+                                sender.send((pos, chunk)).unwrap_or_else(|e|
+                                    panic!("Failed to send loaded chunk back to main thread: {}", e)
+                                );
+                            });
 
-                    *thread_slot = Some(receiver);
-                    if i > self.highest_thread_idx { self.highest_thread_idx = i; }
+                            *thread_slot = Some(receiver);
+                        }
+                        else {
+                            self.requeue.push(item)
+                        }
+                    }
 
                     if self.queue.is_empty() { break; }
                 }
             }
+        }
+
+        // Requeue stuff from 'requeue' and empty it
+        for item in mem::take(&mut self.requeue).into_iter() {
+            let pos = item.pos;
+            self.queue.push(item, priority(pos));
         }
     }
 }

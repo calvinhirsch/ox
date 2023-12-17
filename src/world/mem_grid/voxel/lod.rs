@@ -1,12 +1,11 @@
 use std::marker::PhantomData;
-use std::mem;
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use crate::renderer::component::voxels::lod::RendererVoxelLOD;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::world::mem_grid::layer::{MemoryGridLayer};
 use crate::world::mem_grid::utils::cubed;
-use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxels};
-use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, ChunkEditor, NewMemoryGridEditor};
+use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkUpdateRegions, ChunkVoxels};
+use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, ChunkEditor, NewMemoryGridEditor, Placeholder};
 use crate::world::{TLCPos, TLCVector};
 use std::sync::Arc;
 use getset::Getters;
@@ -29,7 +28,7 @@ pub struct VoxelLODCreateParams {
 pub struct VoxelMemoryGridLOD {
     bitmask_layer: MemoryGridLayer<ChunkBitmask>,
     voxel_layer: Option<MemoryGridLayer<ChunkVoxels>>,
-    updated_bitmask_regions_layer: MemoryGridLayer<Vec<BufferCopy>>,
+    updated_bitmask_regions_layer: MemoryGridLayer<ChunkUpdateRegions>,
     voxels_per_tlc: usize,
 }
 
@@ -44,8 +43,8 @@ impl VoxelMemoryGridLOD {
         let bitmask = vec![ChunkBitmask::new_blank(voxels_per_tlc); cubed(params.size)] ;
         let voxels = params.voxel_type_ids_binding.map(|_| vec![ChunkVoxels::new_blank(voxels_per_tlc); cubed(params.size)]);
         let lod = RendererVoxelLOD::new(
-            bitmask.iter().map(|c| &c.bitmask).flatten().copied().collect::<Vec<_>>().into_iter(),  // ENHANCEMENT: Do this better (and below)
-            voxels.as_ref().map(|voxs| voxs.iter().map(|c| &c.ids).flatten().copied().collect::<Vec<_>>().into_iter()),
+            bitmask.iter().flat_map(|c| &c.bitmask).copied().collect::<Vec<_>>().into_iter(),  // ENHANCEMENT: Do this better (and below)
+            voxels.as_ref().map(|voxs| voxs.iter().flat_map(|c| &c.ids).copied().collect::<Vec<_>>().into_iter()),
             params.bitmask_binding,
             params.voxel_type_ids_binding,
             buffer_allocator,
@@ -69,7 +68,7 @@ impl VoxelMemoryGridLOD {
                     )
                 ),
                 updated_bitmask_regions_layer: MemoryGridLayer::new(
-                    vec![vec![]; cubed(params.size)],
+                    vec![ChunkUpdateRegions::new(); cubed(params.size)],
                     start_tlc,
                     params.size,
                     tlc_size,
@@ -108,7 +107,7 @@ impl VoxelMemoryGridLOD {
             };
             let bm_offset = chunk_i * voxels_per_tlc / VoxelBitmask::BITS_PER_VOXEL;
 
-            for region in regions.iter_mut() {
+            for region in regions.regions.iter_mut() {
                 bitmask_updated_regions.push(BufferCopy {
                     src_offset: region.src_offset,
                     dst_offset: region.dst_offset + bm_offset as u64,
@@ -121,7 +120,7 @@ impl VoxelMemoryGridLOD {
                 None => {}
                 Some(vi_regions) => {
                     let scale = VoxelTypeIDs::BITS_PER_VOXEL / VoxelBitmask::BITS_PER_VOXEL;
-                    for region in regions.iter_mut() {
+                    for region in regions.regions.iter_mut() {
                         vi_regions.push(BufferCopy {
                             src_offset: region.src_offset * scale as u64,
                             dst_offset: (region.dst_offset + bm_offset as u64) * scale as u64,
@@ -133,7 +132,7 @@ impl VoxelMemoryGridLOD {
             }
 
             if clear_regions {
-                regions.clear();
+                regions.regions.clear();
             }
 
             updates.push(
@@ -154,7 +153,11 @@ impl MemoryGrid for VoxelMemoryGridLOD {
     type ChunkLoadQueueItemData = ();
 
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<()>> {
-        // Because the queues for all three of the layers will be the same size, only need to get one.
+        // Because the queues for all three of the layers will be the same size, only need to return one.
+        self.voxel_layer.as_mut().map(
+            |layer| layer.queue_load_all()
+        );
+        self.updated_bitmask_regions_layer.queue_load_all();
         self.bitmask_layer.queue_load_all()
     }
 
@@ -263,14 +266,14 @@ pub struct VoxelLODChunkEditor<'a, VE: VoxelTypeEnum> {
     voxels: Option<&'a mut ChunkVoxels>,
     #[get="pub"]
     bitmask: &'a mut ChunkBitmask,
-    updated_bitmask_regions: &'a mut Vec<BufferCopy>,
+    updated_bitmask_regions: &'a mut ChunkUpdateRegions,
 }
 
 #[derive(Debug, Clone)]
 pub struct VoxelLODChunkCapsule {
     voxels: Option<ChunkVoxels>,
     bitmask: ChunkBitmask,
-    updated_bitmask_regions: Vec<BufferCopy>
+    updated_bitmask_regions: ChunkUpdateRegions
 }
 
 
@@ -290,19 +293,41 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
         VoxelLODChunkCapsule {
             voxels: self.voxels.as_mut().map(|v| v.replace_with_placeholder()),
             bitmask: self.bitmask.replace_with_placeholder(),
-            updated_bitmask_regions: mem::take(self.updated_bitmask_regions),
+            updated_bitmask_regions: self.updated_bitmask_regions.replace_with_placeholder(),
         }
     }
 
     fn replace_with_capsule(&mut self, capsule: Self::Capsule) {
-        self.voxels.as_mut().map(|v| **v = capsule.voxels.unwrap());
+        if let Some(v) = self.voxels.as_mut() { **v = capsule.voxels.unwrap(); }
         *self.bitmask = capsule.bitmask;
         *self.updated_bitmask_regions = capsule.updated_bitmask_regions;
+    }
+
+    fn ok_to_load(&self) -> bool {
+        // Not loaded but NOT a placeholder value
+        !self.bitmask.loaded && !self.bitmask.is_placeholder()
+    }
+
+    fn ok_to_replace_with_capsule(&self) -> bool {
+        self.bitmask.loaded && self.bitmask.is_placeholder()
+    }
+
+    fn prep_for_reload(&mut self) {
+        self.bitmask.loaded = false;
+        self.updated_bitmask_regions.loaded = false;
+        if let Some(v) = self.voxels.as_mut() { v.loaded = false; }
     }
 }
 
 impl <'a, VE: VoxelTypeEnum> VoxelLODChunkEditor<'a, VE> {
     pub fn has_voxel_ids(&self) -> bool { self.voxels.is_some() }
+
+    pub fn set_loaded(&mut self) {
+        self.bitmask.loaded = true;
+        if let Some(v) = self.voxels.as_mut() {
+            v.loaded = true;
+        }
+    }
 
     /// Overwrite voxel data. This will allow editing of the voxel IDs directly and automatically
     /// recalculate the full bitmask when VoxelLODChunkEditor is dropped. Please don't resize the
@@ -324,7 +349,7 @@ impl <'a, VE: VoxelTypeEnum> VoxelLODChunkEditor<'a, VE> {
 
         self.voxels.as_mut().unwrap()[index] = voxel_typ.to_u8().unwrap();
         self.bitmask.set_block(index, voxel_typ.def().is_visible);
-        self.updated_bitmask_regions.push(BufferCopy {
+        self.updated_bitmask_regions.regions.push(BufferCopy {
             src_offset: (index / 8) as DeviceSize,
             dst_offset: (index / 8) as DeviceSize,
             size: 1,
@@ -401,7 +426,7 @@ impl <'a, VE: VoxelTypeEnum> VoxelLODChunkEditor<'a, VE> {
         }
 
         self.bitmask.set_block(voxel_index, visible_count as f32 >= lod_block_fill_thresh * count as f32);
-        self.updated_bitmask_regions.push(BufferCopy {
+        self.updated_bitmask_regions.regions.push(BufferCopy {
             src_offset: (voxel_index / 8) as DeviceSize,
             dst_offset: (voxel_index / 8) as DeviceSize,
             size: 1,
@@ -537,12 +562,12 @@ pub struct VoxelEditor<'a, VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     pub voxels: &'a mut ChunkVoxels,
     bitmask: &'a mut ChunkBitmask,
-    updated_bitmask_regions: &'a mut Vec<BufferCopy>,
+    updated_bitmask_regions: &'a mut ChunkUpdateRegions,
 }
 impl<'a, VE: VoxelTypeEnum> Drop for VoxelEditor<'a, VE> {
     fn drop(&mut self) {
         calc_full_bitmask::<VE>(self.voxels, self.bitmask);
-        self.updated_bitmask_regions.push(BufferCopy {
+        self.updated_bitmask_regions.regions.push(BufferCopy {
             src_offset: 0,
             dst_offset: 0,
             size: ((self.bitmask.n_voxels() + 7) / 8) as DeviceSize,

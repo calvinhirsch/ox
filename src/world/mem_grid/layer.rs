@@ -72,15 +72,19 @@ impl<C> MemoryGridLayer<C> {
     }
 }
 
-impl ChunkLoadQueueItemData for () {
-}
+impl ChunkLoadQueueItemData for () {}
 
 impl<C> MemoryGrid for MemoryGridLayer<C> {
     type ChunkLoadQueueItemData = ();
 
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
+        // for chunk in self.chunks.iter_mut() {
+        //     chunk.invalidate();
+        // }
+
         let start_tlc = self.start_tlc.0;
         let size = self.size;
+
         (0..size as i64).flat_map(|x|
             (0..size as i64).flat_map(move |y|
                 (0..size as i64).map(move |z|
@@ -111,6 +115,20 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
 
         let mut chunk_set = HashSet::new();
         let vgrid_size = self.size - 1;
+        let tlc_size = self.tlc_size;
+
+        let mut queue_chunk = |vgrid_chunk: TLCPos<i64>| {
+            chunk_set.insert(ChunkLoadQueueItem {
+                pos: TLCPos(vgrid_chunk.0 + self.start_tlc.0.to_vec()),
+                data: (),
+            });
+
+            // let grid_chunk = self.grid_pos_for_virtual_grid_pos(
+            //     TLCVector(vgrid_chunk.0.to_vec().cast::<usize>().unwrap()),
+            //     vgrid_size
+            // );
+            // self.chunks[index_for_pos(grid_chunk.0, self.size)].invalidate();
+        };
 
         for (a, b, c) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
             if shift.0[a] != 0 {
@@ -120,58 +138,41 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
                 {
                     for bv in 0..vgrid_size {
                         for cv in 0..vgrid_size {
-                            let chunk = abc_pos(av, bv as i32, cv as i32, a, b, c);
-                            chunk_set.insert(ChunkLoadQueueItem {
-                                pos: TLCPos(chunk.0 + self.start_tlc.0.to_vec()),
-                                data: (),
-                            });
+                            queue_chunk(abc_pos(av, bv as i32, cv as i32, a, b, c));
                         }
                     }
                 }
             }
         }
 
-        let mut chunks: Vec<ChunkLoadQueueItem<()>> = chunk_set.into_iter().collect();
-
         for (a, b, c) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
             if load_buffer[a] {
-                let av = if shift.0[a] > 0 { self.tlc_size as i32 } else { -1 };
+                let av = if shift.0[a] > 0 { tlc_size as i32 } else { -1 };
                 for bv in 0..vgrid_size {
                     for cv in 0..vgrid_size {
-                        let chunk = abc_pos(av, bv as i32, cv as i32, a, b, c);
-                        chunks.push(ChunkLoadQueueItem {
-                            pos: TLCPos(chunk.0 + self.start_tlc.0.to_vec()),
-                            data: (),
-                        });
+                        queue_chunk(abc_pos(av, bv as i32, cv as i32, a, b, c));
                     }
                 }
             }
             if load_buffer[a] && load_buffer[b] {
-                let av = if shift.0[a] > 0 { self.tlc_size as i64 } else { -1 };
-                let bv = if shift.0[b] > 0 { self.tlc_size as i64 } else { -1 };
+                let av = if shift.0[a] > 0 { tlc_size as i64 } else { -1 };
+                let bv = if shift.0[b] > 0 { tlc_size as i64 } else { -1 };
                 for cv in 0..vgrid_size as i64 {
-                    let chunk = abc_pos(av, bv, cv, a, b, c);
-                    chunks.push(ChunkLoadQueueItem {
-                        pos: TLCPos(chunk.0 + self.start_tlc.0.to_vec()),
-                        data: (),
-                    });
+                    queue_chunk(abc_pos(av, bv, cv, a, b, c));
                 }
             }
         }
 
         if load_buffer.iter().all(|x| *x) {
             let chunk = Point3 {
-                x: if shift.0.x > 0 { self.tlc_size as i64 } else { -1 },
-                y: if shift.0.y > 0 { self.tlc_size as i64 } else { -1 },
-                z: if shift.0.z > 0 { self.tlc_size as i64 } else { -1 },
+                x: if shift.0.x > 0 { tlc_size as i64 } else { -1 },
+                y: if shift.0.y > 0 { tlc_size as i64 } else { -1 },
+                z: if shift.0.z > 0 { tlc_size as i64 } else { -1 },
             };
-            chunks.push(ChunkLoadQueueItem {
-                pos: TLCPos(chunk + self.start_tlc.0.to_vec()),
-                data: (),
-            });
+            queue_chunk(TLCPos(chunk));
         }
 
-        chunks
+        chunk_set.into_iter().collect()
     }
 
     fn size(&self) -> usize { self.size }

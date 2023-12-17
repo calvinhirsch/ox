@@ -174,7 +174,6 @@ impl<QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Send +
         let start_tlc = self.mem_grid.start_tlc();
         let chunks_to_load = mem::take(&mut self.chunks_to_load);
         let mut mem_grid_editor = E::for_grid(&mut self.mem_grid);
-        dbg!(mem_grid_editor.this().chunks.len());
         self.chunk_loader.sync(start_tlc, &mut mem_grid_editor, chunks_to_load);
 
         WorldEditor {

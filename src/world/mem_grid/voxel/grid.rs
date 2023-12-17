@@ -209,13 +209,13 @@ impl<'a, VE: VoxelTypeEnum> NewMemoryGridEditor<'a, VoxelMemoryGrid> for MemoryG
         ).collect();
 
         MemoryGridEditor {
-            // lifetime: PhantomData,
-            chunks: LODSplitter(chunk_iters).map(|chunk_lods|
+            chunks: LODSplitter(chunk_iters).map(|chunk_lods|{
                 Some(
                     ChunkVoxelEditor {
                         lods: chunk_lods,
                     }
                 )
+            }
             ).collect(),
             size,
             start_tlc,
@@ -231,10 +231,27 @@ impl<I: Iterator> Iterator for LODSplitter<I> {
     type Item = Vec<Vec<I::Item>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0
+        let next_items: Vec<Vec<_>> = self.0
             .iter_mut()
-            .map(|iters| iters.iter_mut().map(|iter| iter.as_mut()?.next()).collect())
-            .collect()
+            .map(|iters| iters.iter_mut().map(|iter| iter.as_mut().map(Iterator::next)).collect()).collect();
+
+        // If any of the iterators are Some (meaning the LOD exists) but the item in it is None, then stop iterating
+        if next_items.iter().any(|iters| iters.iter().any(|iter|
+            matches!(iter, Some(None))
+        )) {
+            // If one iterator is depleted, make sure all others are too
+            debug_assert!(
+                next_items.iter().any(|iters| iters.iter().any(|iter|
+                    matches!(iter, Some(None)) || iter.is_none()
+                )),
+                "LOD chunk iterators passed to LODSplitter have different numbers of chunks."
+            );
+            return None;
+        }
+
+        next_items.into_iter().map(|items|
+            items.into_iter().map(|item| item.flatten()).collect()
+        ).collect()
     }
 }
 
@@ -286,6 +303,24 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for ChunkVoxelEditor<'a, VE> {
             }
         }
     }
+
+    fn ok_to_load(&self) -> bool {
+        self.lods.iter().all(|lvl| lvl.iter()
+            .all(|lod| lod.is_none() || lod.as_ref().unwrap().ok_to_load()))
+    }
+
+    fn ok_to_replace_with_capsule(&self) -> bool {
+        self.lods.iter().all(|lvl| lvl.iter()
+            .all(|lod| lod.is_none() || lod.as_ref().unwrap().ok_to_replace_with_capsule()))
+    }
+
+    fn prep_for_reload(&mut self) {
+        for lvl in self.lods.iter_mut() {
+            for lod in lvl.iter_mut().flatten() {
+                lod.prep_for_reload();
+            }
+        }
+    }
 }
 
 
@@ -314,7 +349,10 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                 let load = lods_to_load[lvl_i][lod_i];
 
                 if let Some(lod_data) = lod {
+                    let loaded = lod_data.bitmask().loaded;
                     if load {
+                        debug_assert!(!loaded);  // Should have been marked not loaded before loading
+
                         // Need to load the info in this chunk
                         if lod_data.has_voxel_ids() {
                             if let (Some(l_lvl), Some(l_lod)) = (last_lvl, last_lod) {
@@ -329,7 +367,7 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                                     n_chunk_lvls,
                                     n_lods,
                                     lod_block_fill_thresh,
-                                )
+                                );
                             }
                             else {
                                 // Generate voxels
@@ -338,7 +376,7 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                                     lvl_i,
                                     lod_i,
                                     lod_data.overwrite().voxels
-                                )
+                                );
                             }
                         }
                         else {
@@ -355,14 +393,18 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                                 lod_block_fill_thresh,
                             )
                         }
+
+                        lod_data.set_loaded();
                     }
-                    else if lod_data.has_voxel_ids() {
+                    else if loaded && lod_data.has_voxel_ids() {
                         last_lvl = Some(lvl_i);
                         last_lod = Some(lod_i);
                     }
 
-                    last_bitmask_lod = Some(lod_i);
-                    last_bitmask_lvl = Some(lvl_i);
+                    if loaded {
+                        last_bitmask_lod = Some(lod_i);
+                        last_bitmask_lvl = Some(lvl_i);
+                    }
                 }
             });
     }
