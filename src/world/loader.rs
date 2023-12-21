@@ -120,7 +120,7 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Se
         for item in queue {
             let pos = item.pos;
             if let Some(Some(editor_chunk)) = editor_chunk_i(pos).map(|i| editor.this_mut().chunks[i].as_mut()) {
-                editor_chunk.prep_for_reload();
+                editor_chunk.on_queued_for_loading();
             }
             self.queue.push(item, priority(pos));
         }
@@ -136,13 +136,14 @@ impl<'a, QI: ChunkLoadQueueItemData + 'static, C: LoadChunk<QI, MD> + Clone + Se
                     if let Some(Some(editor_chunk)) = editor_chunk_i(item.pos)
                         .map(|i| editor.this_mut().chunks[i].as_mut()) {
 
-                        if editor_chunk.ok_to_load() {
+                        if editor_chunk.ok_to_replace_with_placeholder() {
 
                             // Create a placeholder for this chunk and swap it into the grid so we can edit
                             // the real one.
                             let mut chunk = editor_chunk.replace_with_placeholder();
                             let meta = editor.this().metadata().clone();
                             let pos = item.pos;
+                            println!("Start");
                             thread::spawn(move || {
                                 chunk.load_new(item, meta);
                                 sender.send((pos, chunk)).unwrap_or_else(|e|

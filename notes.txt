@@ -3,6 +3,7 @@ TO-DO rust:
     - Deriving DataComponentWrapper
     - Deriving DataComponentSet if all struct members are DataComponentWrapper or DataComponent (?)
     - Defining custom physical memory grid / virtual memory grid when members are all also grids
+ - Consider making top level chunk bitmask data its own thing and separating it out from lods
 
 TO-DO shader:
  - Fix infinite loop while tracing ray. Happens at lvl 0 iteration 0 after 2-3 bounces

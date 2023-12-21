@@ -35,13 +35,12 @@ pub struct VoxelMemoryGridLOD {
 impl VoxelMemoryGridLOD {
     pub fn new(
         params: VoxelLODCreateParams,
-        voxels_per_tlc: usize,
         start_tlc: TLCPos<i64>,
-        tlc_size: usize,
+        lod_tlc_size: usize,
         buffer_allocator: Arc<dyn MemoryAllocator>,
     ) -> (Self, RendererVoxelLOD) {
-        let bitmask = vec![ChunkBitmask::new_blank(voxels_per_tlc); cubed(params.size)] ;
-        let voxels = params.voxel_type_ids_binding.map(|_| vec![ChunkVoxels::new_blank(voxels_per_tlc); cubed(params.size)]);
+        let bitmask = vec![ChunkBitmask::new_blank(cubed(lod_tlc_size)); cubed(params.size)] ;
+        let voxels = params.voxel_type_ids_binding.map(|_| vec![ChunkVoxels::new_blank(cubed(lod_tlc_size)); cubed(params.size)]);
         let lod = RendererVoxelLOD::new(
             bitmask.iter().flat_map(|c| &c.bitmask).copied().collect::<Vec<_>>().into_iter(),  // ENHANCEMENT: Do this better (and below)
             voxels.as_ref().map(|voxs| voxs.iter().flat_map(|c| &c.ids).copied().collect::<Vec<_>>().into_iter()),
@@ -57,23 +56,20 @@ impl VoxelMemoryGridLOD {
                     bitmask,
                     start_tlc,
                     params.size,
-                    tlc_size,
                 ),
                 voxel_layer: voxels.map(|voxs|
                     MemoryGridLayer::new(
                         voxs,
                         start_tlc,
                         params.size,
-                        tlc_size,
                     )
                 ),
                 updated_bitmask_regions_layer: MemoryGridLayer::new(
                     vec![ChunkUpdateRegions::new(); cubed(params.size)],
                     start_tlc,
                     params.size,
-                    tlc_size,
                 ),
-                voxels_per_tlc: cubed(tlc_size),
+                voxels_per_tlc: cubed(lod_tlc_size),
             },
             lod,
         )
@@ -277,8 +273,24 @@ pub struct VoxelLODChunkCapsule {
 }
 
 
+impl VoxelLODChunkCapsule {
+    pub fn set_loaded(&mut self) {
+        if let Some(v) = self.voxels.as_mut() {
+            v.loaded = true;
+        }
+        self.bitmask.loaded = true;
+        self.updated_bitmask_regions.loaded = true;
+    }
+}
+
 impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
     type Capsule = VoxelLODChunkCapsule;
+
+    fn on_queued_for_loading(&mut self) {
+        self.bitmask.loaded = false;
+        self.updated_bitmask_regions.loaded = false;
+        if let Some(v) = self.voxels.as_mut() { v.loaded = false; }
+    }
 
     fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self {
         VoxelLODChunkEditor {
@@ -303,19 +315,13 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
         *self.updated_bitmask_regions = capsule.updated_bitmask_regions;
     }
 
-    fn ok_to_load(&self) -> bool {
+    fn ok_to_replace_with_placeholder(&self) -> bool {
         // Not loaded but NOT a placeholder value
         !self.bitmask.loaded && !self.bitmask.is_placeholder()
     }
 
     fn ok_to_replace_with_capsule(&self) -> bool {
         self.bitmask.loaded && self.bitmask.is_placeholder()
-    }
-
-    fn prep_for_reload(&mut self) {
-        self.bitmask.loaded = false;
-        self.updated_bitmask_regions.loaded = false;
-        if let Some(v) = self.voxels.as_mut() { v.loaded = false; }
     }
 }
 

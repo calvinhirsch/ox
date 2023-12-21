@@ -84,7 +84,7 @@ pub trait ChunkEditor<'a>: Sized {
 
     /// Called when chunk is initially queued for loading. Should set some internal state that makes it clear this data
     /// is no longer valid (e.g. in VoxelLOD set loaded = false).
-    fn prep_for_reload(&mut self);
+    fn on_queued_for_loading(&mut self);
 
     fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self;
 
@@ -95,7 +95,7 @@ pub trait ChunkEditor<'a>: Sized {
     fn replace_with_capsule(&mut self, capsule: Self::Capsule);
 
     /// Called before calling replace_with_placeholder, should check that there are no placeholder values.
-    fn ok_to_load(&self) -> bool;
+    fn ok_to_replace_with_placeholder(&self) -> bool;
 
     /// Called before calling replace_with_capsule with a loaded capsule, should ensure that all data fields are
     /// placeholders, otherwise something has gone wrong (only used in debug mode).

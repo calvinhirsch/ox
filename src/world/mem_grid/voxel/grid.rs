@@ -45,8 +45,8 @@ impl ChunkLoadQueueItemData for VoxelChunkLoadQueueItemData {}
 
 
 impl VoxelMemoryGrid {
-    fn voxels_per_tlc(chunk_size: usize, n_lvls: usize, lvl: usize, lod: usize) -> usize {
-        chunk_size.pow((n_lvls - lvl) as u32).to_le() >> (lod * 3)
+    fn lod_tlc_size(chunk_size: usize, n_lvls: usize, lvl: usize, lod: usize) -> usize {
+        chunk_size.pow((n_lvls - lvl) as u32).to_le() >> lod
     }
 
     pub fn new(
@@ -54,7 +54,6 @@ impl VoxelMemoryGrid {
         memory_allocator: Arc<dyn MemoryAllocator>,
         chunk_size: usize,
         start_tlc: TLCPos<i64>,
-        tlc_size: usize,
         lod_block_fill_thresh: f32,
     ) -> (Self, VoxelData) {
         let (largest_lvl, largest_lod, size) = lod_params
@@ -65,7 +64,7 @@ impl VoxelMemoryGrid {
                 ).max_by_key(|x| x.2)
             ).max_by_key(|x| x.2)
             .unwrap();
-        let n_lvls = lod_params.len();
+        let n_lvls = lod_params.len() - 1;
         let n_lods = lod_params.first().unwrap().len();
 
         let (grid_lods, lods) = lod_params
@@ -79,13 +78,11 @@ impl VoxelMemoryGrid {
                         match params_o {
                             None => (None, None),
                             Some(params) => {
-                                let voxels_per_tlc = Self::voxels_per_tlc(chunk_size, n_lvls, lvl, lod);
                                 let lod_start_tlc = TLCPos(start_tlc.0 + Vector3::from_value(((size - params.size)/2) as i64));
                                 let (a, b) = VoxelMemoryGridLOD::new(
                                     params,
-                                    voxels_per_tlc,
                                     lod_start_tlc,
-                                    tlc_size,
+                                    Self::lod_tlc_size(chunk_size, n_lvls, lvl, lod),
                                     Arc::clone(&memory_allocator),
                                 );
                                 (Some(a), Some(b))
@@ -138,7 +135,7 @@ impl VoxelMemoryGrid {
                                 ChunkLoadQueueItem {
                                     pos: item.pos,
                                     data: VoxelChunkLoadQueueItemData {
-                                        lods: vec![vec![false; n_lods]; n_lvls],
+                                        lods: vec![vec![false; n_lods]; n_lvls+1],
                                     }
                                 }
                             );
@@ -202,20 +199,21 @@ impl<'a, VE: VoxelTypeEnum> NewMemoryGridEditor<'a, VoxelMemoryGrid> for MemoryG
     fn for_grid_with_size(mem_grid: &'a mut VoxelMemoryGrid, grid_size: usize) -> Self {
         let size = mem_grid.size();
         let start_tlc = mem_grid.start_tlc();
-        let chunk_iters = mem_grid.lods.iter_mut().map(|lvl_lods|
+        let chunk_iters: Vec<Vec<_>> = mem_grid.lods.iter_mut().map(|lvl_lods|
             lvl_lods.iter_mut().map(|lod_o|
                 lod_o.as_mut().map(|lod| MemoryGridEditor::for_grid_with_size(lod, grid_size).chunks.into_iter())
             ).collect()
         ).collect();
 
         MemoryGridEditor {
-            chunks: LODSplitter(chunk_iters).map(|chunk_lods|{
+            chunks: LODSplitter(chunk_iters).map(|chunk_lods|
                 Some(
                     ChunkVoxelEditor {
-                        lods: chunk_lods,
+                        lods: chunk_lods.into_iter().map(|lvl|
+                            lvl.into_iter().map(|lod| lod.flatten()).collect()
+                        ).collect(),
                     }
                 )
-            }
             ).collect(),
             size,
             start_tlc,
@@ -228,7 +226,7 @@ impl<'a, VE: VoxelTypeEnum> NewMemoryGridEditor<'a, VoxelMemoryGrid> for MemoryG
 struct LODSplitter<I: Iterator>(Vec<Vec<Option<I>>>);
 
 impl<I: Iterator> Iterator for LODSplitter<I> {
-    type Item = Vec<Vec<I::Item>>;
+    type Item = Vec<Vec<Option<I::Item>>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_items: Vec<Vec<_>> = self.0
@@ -249,9 +247,11 @@ impl<I: Iterator> Iterator for LODSplitter<I> {
             return None;
         }
 
-        next_items.into_iter().map(|items|
-            items.into_iter().map(|item| item.flatten()).collect()
-        ).collect()
+        Some(
+            next_items.into_iter().map(|items|
+                items.into_iter().map(|item| item.map(|i| i.unwrap())).collect()
+            ).collect()
+        )
     }
 }
 
@@ -269,6 +269,14 @@ pub struct ChunkVoxelCapsule {
 
 impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for ChunkVoxelEditor<'a, VE> {
     type Capsule = ChunkVoxelCapsule;
+
+    fn on_queued_for_loading(&mut self) {
+        for lvl in self.lods.iter_mut() {
+            for lod in lvl.iter_mut().flatten() {
+                lod.on_queued_for_loading();
+            }
+        }
+    }
 
     fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self {
         ChunkVoxelEditor {
@@ -304,20 +312,22 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for ChunkVoxelEditor<'a, VE> {
         }
     }
 
-    fn ok_to_load(&self) -> bool {
+    fn ok_to_replace_with_placeholder(&self) -> bool {
         self.lods.iter().all(|lvl| lvl.iter()
-            .all(|lod| lod.is_none() || lod.as_ref().unwrap().ok_to_load()))
+            .all(|lod| lod.is_none() || lod.as_ref().unwrap().ok_to_replace_with_placeholder()))
     }
 
     fn ok_to_replace_with_capsule(&self) -> bool {
         self.lods.iter().all(|lvl| lvl.iter()
             .all(|lod| lod.is_none() || lod.as_ref().unwrap().ok_to_replace_with_capsule()))
     }
+}
 
-    fn prep_for_reload(&mut self) {
-        for lvl in self.lods.iter_mut() {
-            for lod in lvl.iter_mut().flatten() {
-                lod.prep_for_reload();
+impl ChunkVoxelCapsule {
+    pub fn set_loaded(&mut self) {
+        for lod in self.lods.iter_mut().flatten() {
+            if let Some(l) = lod.as_mut() {
+                l.set_loaded();
             }
         }
     }
@@ -351,7 +361,7 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                 if let Some(lod_data) = lod {
                     let loaded = lod_data.bitmask().loaded;
                     if load {
-                        debug_assert!(!loaded);  // Should have been marked not loaded before loading
+                        debug_assert!(!loaded, "{}, {}", lvl_i, lod_i);  // Should have been marked not loaded before loading
 
                         // Need to load the info in this chunk
                         if lod_data.has_voxel_ids() {

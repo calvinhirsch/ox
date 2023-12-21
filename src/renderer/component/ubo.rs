@@ -9,6 +9,7 @@ use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithFullCopy};
 pub struct Ubo {
     pub sun_dir: [f32; 3],
     pub time: u32,
+    pub start_tlc: [i32; 3],  // ENHANCEMENT: These should really be i64, but glsl uses 32 bit ints
 }
 
 pub struct RendererUBO {
