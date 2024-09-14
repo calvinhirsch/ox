@@ -4,6 +4,9 @@ TO-DO rust:
     - Deriving DataComponentSet if all struct members are DataComponentWrapper or DataComponent (?)
     - Defining custom physical memory grid / virtual memory grid when members are all also grids
  - Consider making top level chunk bitmask data its own thing and separating it out from lods
+ - Consider, instead of having a loaded bool for chunks, have an enum type for loaded/unloaded/placeholder -- although this
+   may be complicated by the fact that each LOD has its own loaded state
+ - Make all vecs slices (or better yet, arrays) where they can be
 
 TO-DO shader:
  - Fix infinite loop while tracing ray. Happens at lvl 0 iteration 0 after 2-3 bounces

@@ -65,18 +65,13 @@ pub trait NewMemoryGridEditor<'a, MG: MemoryGrid>: Sized {
 
 pub trait MemoryGrid {
     type ChunkLoadQueueItemData: ChunkLoadQueueItemData + 'static;
+
+    /// Queue all chunks in memory grid to be loaded. Does not queue buffer chunks or change their state.
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     fn shift(&mut self, shift: TLCVector<i32>, load_in_from_edge: TLCVector<i32>, load_buffer: [bool; 3]) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     fn size(&self) -> usize;
     fn start_tlc(&self) -> TLCPos<i64>;
 }
-
-// pub trait EditMemoryGrid<CE, MD>: MemoryGrid {
-//     fn edit(&mut self) -> MemoryGridEditor<CE, MD> {
-//         self.edit_for_size(self.size())
-//     }
-//     fn edit_for_size(&mut self, grid_size: usize) -> MemoryGridEditor<CE, MD>;
-// }
 
 
 pub trait ChunkEditor<'a>: Sized {

@@ -1,4 +1,4 @@
-use crate::world::mem_grid::utils::{amod, pos_for_index, index_for_pos};
+use crate::world::mem_grid::utils::{amod, pos_for_index, index_for_pos, cubed};
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, NewMemoryGridEditor};
 use crate::world::{TLCPos, TLCVector};
 use cgmath::{Array, EuclideanSpace, Vector3, Point3};
@@ -75,16 +75,14 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
     type ChunkLoadQueueItemData = ();
 
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        // for chunk in self.chunks.iter_mut() {
-        //     chunk.invalidate();
-        // }
-
         let start_tlc = self.start_tlc.0;
         let size = self.size;
 
-        (0..size as i64).flat_map(|x|
-            (0..size as i64).flat_map(move |y|
-                (0..size as i64).map(move |z|
+        println!("{:?}  {}", start_tlc, size);
+
+        (0..size as i64 - 1).flat_map(|x|
+            (0..size as i64 - 1).flat_map(move |y|
+                (0..size as i64 - 1).map(move |z|
                     ChunkLoadQueueItem {
                         pos: TLCPos(start_tlc + Vector3 { x, y, z }),
                         data: (),
@@ -111,7 +109,7 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
         }
 
         let mut chunk_set = HashSet::new();
-        let vgrid_size = self.size - 1;
+        let active_size = self.size - 1;  // size of grid excluding buffer chunks
 
         let mut queue_chunk = |vgrid_chunk: TLCPos<i64>| {
             chunk_set.insert(ChunkLoadQueueItem {
@@ -130,10 +128,10 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
             if shift.0[a] != 0 {
                 for av in
                 if shift.0[a] < 0 { 0..load_in_from_edge.0[a] }
-                else { vgrid_size as i32 - 1 - load_in_from_edge.0[a] .. vgrid_size as i32 }
+                else { active_size as i32 - 1 - load_in_from_edge.0[a] .. active_size as i32 }
                 {
-                    for bv in 0..vgrid_size {
-                        for cv in 0..vgrid_size {
+                    for bv in 0..active_size {
+                        for cv in 0..active_size {
                             queue_chunk(abc_pos(av, bv as i32, cv as i32, a, b, c));
                         }
                     }
@@ -143,17 +141,17 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
 
         for (a, b, c) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
             if load_buffer[a] {
-                let av = if shift.0[a] > 0 { vgrid_size as i32 } else { -1 };
-                for bv in 0..vgrid_size {
-                    for cv in 0..vgrid_size {
+                let av = if shift.0[a] > 0 { active_size as i32 } else { -1 };
+                for bv in 0..active_size {
+                    for cv in 0..active_size {
                         queue_chunk(abc_pos(av, bv as i32, cv as i32, a, b, c));
                     }
                 }
             }
             if load_buffer[a] && load_buffer[b] {
-                let av = if shift.0[a] > 0 { vgrid_size as i64 } else { -1 };
-                let bv = if shift.0[b] > 0 { vgrid_size as i64 } else { -1 };
-                for cv in 0..vgrid_size as i64 {
+                let av = if shift.0[a] > 0 { active_size as i64 } else { -1 };
+                let bv = if shift.0[b] > 0 { active_size as i64 } else { -1 };
+                for cv in 0..active_size as i64 {
                     queue_chunk(abc_pos(av, bv, cv, a, b, c));
                 }
             }
@@ -161,9 +159,9 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
 
         if load_buffer.iter().all(|x| *x) {
             let chunk = Point3 {
-                x: if shift.0.x > 0 { vgrid_size as i64 } else { -1 },
-                y: if shift.0.y > 0 { vgrid_size as i64 } else { -1 },
-                z: if shift.0.z > 0 { vgrid_size as i64 } else { -1 },
+                x: if shift.0.x > 0 { active_size as i64 } else { -1 },
+                y: if shift.0.y > 0 { active_size as i64 } else { -1 },
+                z: if shift.0.z > 0 { active_size as i64 } else { -1 },
             };
             queue_chunk(TLCPos(chunk));
         }
@@ -212,30 +210,25 @@ impl<C> MemoryGrid for MemoryGridLayer<C> {
 
 impl<'a, C: 'static, CE: From<&'a mut C>> NewMemoryGridEditor<'a, MemoryGridLayer<C>> for MemoryGridEditor<CE, ()> {
     fn for_grid_with_size(mem_grid: &'a mut MemoryGridLayer<C>, grid_size: usize) -> Self {
-        let vgrid_size = grid_size - 1;
-        let mut vgrid: Vec<Option<CE>> = (0..vgrid_size.pow(3)).map(|_| None).collect();
+        let mut vgrid: Vec<Option<CE>> = (0..grid_size.pow(3)).map(|_| None).collect();
 
         // If this layer is smaller than full grid, add padding to virtual position so it
         // is centered
-        let virtual_positions: Vec<_> = (0..grid_size).map(|i|
+        let vgrid_positions: Vec<_> = (0..cubed(mem_grid.size)).map(|i|
             mem_grid.virtual_grid_pos_for_grid_pos(
                 TLCVector(pos_for_index(i, mem_grid.size)),
-                vgrid_size,
+                grid_size,
             )
         ).collect();
 
-        for (chunk_data, virtual_pos) in mem_grid.chunks.iter_mut()
-            .zip(virtual_positions) {
-            // Skip the buffer chunks in mem grid (i.e. the ones that don't fall within the virtual grid)
-            if virtual_pos.0.x < vgrid_size && virtual_pos.0.y < vgrid_size && virtual_pos.0.z < vgrid_size {
-                vgrid[index_for_pos(virtual_pos.0, vgrid_size)] = Some(CE::from(chunk_data));
-            }
+        for (chunk_data, vgrid_pos) in mem_grid.chunks.iter_mut().zip(vgrid_positions) {
+            vgrid[index_for_pos(vgrid_pos.0, grid_size)] = Some(CE::from(chunk_data));
         }
 
+
         MemoryGridEditor {
-            // lifetime: PhantomData,
             chunks: vgrid,
-            size: mem_grid.size,
+            size: grid_size,
             start_tlc: mem_grid.start_tlc,
             metadata: (),
         }

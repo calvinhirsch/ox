@@ -35,17 +35,14 @@ impl ChunkVoxels {
 }
 impl Placeholder for ChunkVoxels {
     fn replace_with_placeholder(&mut self) -> Self {
-        let loaded = self.loaded;
-        self.loaded = false;
-
         Self {
-            ids: mem::replace(&mut self.ids, vec![]),
-            loaded,
+            ids: mem::take(&mut self.ids),
+            loaded: mem::replace(&mut self.loaded, false),
         }
     }
 
     fn is_placeholder(&self) -> bool {
-        return !self.loaded && self.ids.len() == 0
+        !self.loaded && self.ids.is_empty()
     }
 }
 

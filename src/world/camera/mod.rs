@@ -1,5 +1,5 @@
 use cgmath::{Point3, Rad};
-use crate::world::VoxelPos;
+use crate::world::{VoxelPos};
 
 pub mod controller;
 
@@ -14,13 +14,15 @@ pub struct Camera {
     pub avg_fov: Rad<f32>,      // average of x-fov and y-fov
 }
 
-impl Default for Camera {
-    fn default() -> Self {
+impl Camera {
+    /// Create a camera at the 0,0,0 position of the center top level chunk.
+    pub fn new(tlc_size: usize, mem_grid_size: usize) -> Camera {
+        let offset = ((mem_grid_size / 2 - 1) * tlc_size) as f32;
         Camera {
             position: VoxelPos(Point3 {
-                x: 0.,
-                y: 0.,
-                z: 0.,
+                x: offset,
+                y: offset,
+                z: offset,
             }),
             yaw: Rad(0.),
             pitch: Rad(0.),
@@ -29,9 +31,7 @@ impl Default for Camera {
             avg_fov: Rad(90.),
         }
     }
-}
 
-impl Camera {
     pub fn pos(&self) -> &VoxelPos<f32> {
         &self.position
     }

@@ -10,6 +10,7 @@ use crate::world::{TLCPos, TLCVector};
 use std::sync::Arc;
 use getset::Getters;
 use hashbrown::HashMap;
+use num::Integer;
 use vulkano::command_buffer::BufferCopy;
 use vulkano::DeviceSize;
 use vulkano::memory::allocator::MemoryAllocator;
@@ -39,6 +40,10 @@ impl VoxelMemoryGridLOD {
         lod_tlc_size: usize,
         buffer_allocator: Arc<dyn MemoryAllocator>,
     ) -> (Self, RendererVoxelLOD) {
+        if !params.size.is_even() {
+            panic!("VoxelMemoryGridLOD was given a grid size of {}, which is not even. Should be even so that if you exclude the buffer there is a center chunk.", params.size)
+        }
+
         let bitmask = vec![ChunkBitmask::new_blank(cubed(lod_tlc_size)); cubed(params.size)] ;
         let voxels = params.voxel_type_ids_binding.map(|_| vec![ChunkVoxels::new_blank(cubed(lod_tlc_size)); cubed(params.size)]);
         let lod = RendererVoxelLOD::new(
@@ -229,7 +234,6 @@ impl<'a, VE: VoxelTypeEnum> NewMemoryGridEditor<'a, VoxelMemoryGridLOD> for Memo
         let start_tlc = bitmask_editor.start_tlc;
 
         MemoryGridEditor {
-            // lifetime: PhantomData,
             chunks: bitmask_editor.chunks.into_iter()
                 .zip(
                     match voxel_editor {
@@ -289,7 +293,7 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
     fn on_queued_for_loading(&mut self) {
         self.bitmask.loaded = false;
         self.updated_bitmask_regions.loaded = false;
-        if let Some(v) = self.voxels.as_mut() { v.loaded = false; }
+        if let Some(ref mut v) = self.voxels { v.loaded = false; }
     }
 
     fn new_from_capsule(capsule: &'a mut Self::Capsule) -> Self {
@@ -316,12 +320,11 @@ impl<'a, VE: VoxelTypeEnum> ChunkEditor<'a> for VoxelLODChunkEditor<'a, VE> {
     }
 
     fn ok_to_replace_with_placeholder(&self) -> bool {
-        // Not loaded but NOT a placeholder value
         !self.bitmask.loaded && !self.bitmask.is_placeholder()
     }
 
     fn ok_to_replace_with_capsule(&self) -> bool {
-        self.bitmask.loaded && self.bitmask.is_placeholder()
+        self.bitmask.is_placeholder()
     }
 }
 

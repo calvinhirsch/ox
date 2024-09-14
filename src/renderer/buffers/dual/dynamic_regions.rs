@@ -46,7 +46,8 @@ impl<T: BufferContents + Copy> DualBufferWithDynamicCopyRegions<T> {
         let rate = 1 / size_of::<T>();
         for region in regions {
             let start = region.src_offset as usize * rate;
-            bitmask_write.copy_from_slice(&src[start..max(start+2, start+region.size as usize*rate)]);
+            let range = start..max(start+2, start + (region.size as usize)*rate);
+            bitmask_write[range.clone()].copy_from_slice(&src[range]);
         }
     }
 }
