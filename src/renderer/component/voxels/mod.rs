@@ -1,5 +1,5 @@
 use crate::renderer::component::voxels::lod::{RendererVoxelLOD, VoxelLODUpdate};
-use crate::renderer::component::{DataComponentSet};
+use crate::renderer::component::DataComponentSet;
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::descriptor_set::WriteDescriptorSet;
@@ -7,12 +7,12 @@ use vulkano::descriptor_set::WriteDescriptorSet;
 pub mod data;
 pub mod lod;
 
-pub struct VoxelData {
-    lods: Vec<Vec<Option<RendererVoxelLOD>>>,
+pub struct VoxelData<const N: usize> {
+    lods: [RendererVoxelLOD; N],
 }
 
-impl VoxelData {
-    pub fn new(lods: Vec<Vec<Option<RendererVoxelLOD>>>) -> Self {
+impl<const N: usize> VoxelData<N> {
+    pub fn new(lods: [RendererVoxelLOD; N]) -> Self {
         VoxelData { lods }
     }
 
@@ -40,13 +40,19 @@ impl DataComponentSet for VoxelData {
         }
     }
 
-    fn record_repeated_buffer_transfer<L, A: CommandBufferAllocator>(&self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+    fn record_repeated_buffer_transfer<L, A: CommandBufferAllocator>(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<L, A>,
+    ) {
         for lod in self.lods.iter().flatten().flatten() {
             lod.record_repeated_buffer_transfer(builder);
         }
     }
 
-    fn record_buffer_transfer_jit<L, A: CommandBufferAllocator>(&mut self, builder: &mut AutoCommandBufferBuilder<L, A>) {
+    fn record_buffer_transfer_jit<L, A: CommandBufferAllocator>(
+        &mut self,
+        builder: &mut AutoCommandBufferBuilder<L, A>,
+    ) {
         for lod in self.lods.iter_mut().flatten().flatten() {
             lod.record_buffer_transfer_jit(builder);
         }

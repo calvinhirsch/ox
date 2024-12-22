@@ -23,6 +23,7 @@ hashbrown = "0.14.3"
 priority-queue = "1.3.2"
 getset = "0.1.2"
 tracing = "0.1.40"
+unzip-array-of-tuple = "0.1.0"
 
 [profile.dev]
 opt-level = 1
