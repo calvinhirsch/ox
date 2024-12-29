@@ -6,6 +6,8 @@ use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use getset::{Getters, MutGetters};
 use hashbrown::HashSet;
 
+use super::ChunkEditor;
+
 #[derive(Clone, Debug, Getters)]
 pub struct MemoryGridLayerMetadata<MD> {
     start_tlc: TLCPos<i64>,
@@ -250,13 +252,18 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
 //     }
 // }
 
-impl<'a, MD, C: 'static, CE: From<&'a mut C>>
-    MemoryGridEditorChunk<'a, MemoryGridLayer<C, MD>, &'a MemoryGridLayerMetadata<MD>> for CE
+impl<
+        'a,
+        MD: 'static,
+        C: 'static,
+        CE: ChunkEditor<&'a mut LayerChunk<C>, &'a MemoryGridLayerMetadata<MD>>,
+    > MemoryGridEditorChunk<'a, MemoryGridLayer<C, MD>, &'a MemoryGridLayerMetadata<MD>>
+    for Option<CE>
 {
     fn edit_grid_with_size(
         mem_grid: &'a mut MemoryGridLayer<C, MD>,
         grid_size: usize,
-    ) -> MemoryGridEditor<CE, &'a MemoryGridLayerMetadata<MD>> {
+    ) -> MemoryGridEditor<Option<CE>, &'a MemoryGridLayerMetadata<MD>> {
         let mut vgrid: Vec<Option<CE>> = (0..grid_size.pow(3)).map(|_| None).collect();
 
         // If this layer is smaller than full grid, add padding to virtual position so it
@@ -274,12 +281,11 @@ impl<'a, MD, C: 'static, CE: From<&'a mut C>>
         let metadata = &mem_grid.metadata;
 
         for (chunk_data, vgrid_pos) in mem_grid.chunks.iter_mut().zip(vgrid_positions) {
-            vgrid[index_for_pos(vgrid_pos.0, grid_size)] =
-                chunk_data.get_mut().map(|cd| CE::from(cd));
+            vgrid[index_for_pos(vgrid_pos.0, grid_size)] = Some(CE::edit(chunk_data, metadata));
         }
 
         MemoryGridEditor {
-            chunks: vgrid.into_iter().map(|c| c.unwrap()).collect(),
+            chunks: vgrid,
             size: grid_size,
             start_tlc,
             metadata,

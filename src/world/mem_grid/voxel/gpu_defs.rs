@@ -5,25 +5,16 @@ use vulkano::command_buffer::BufferCopy;
 #[derive(Clone, Debug)]
 pub struct ChunkVoxels {
     pub ids: Vec<VoxelTypeIDs>,
-    pub loaded: bool,
 }
 
 impl Index<usize> for ChunkVoxels {
     type Output = u8;
     fn index(&self, i: usize) -> &u8 {
-        debug_assert!(
-            self.loaded,
-            "Tried to index ChunkVoxels for an unloaded chunk"
-        );
         &self.ids[i * 8 / 128].indices[i % 8 / 128]
     }
 }
 impl IndexMut<usize> for ChunkVoxels {
     fn index_mut(&mut self, i: usize) -> &mut u8 {
-        debug_assert!(
-            self.loaded,
-            "Tried to index ChunkVoxels for an unloaded chunk"
-        );
         &mut self.ids[i * 8 / 128].indices[i % 8 / 128]
     }
 }
@@ -31,7 +22,6 @@ impl ChunkVoxels {
     pub fn new_blank(n_voxels: usize) -> Self {
         ChunkVoxels {
             ids: VoxelTypeIDs::new_vec(n_voxels),
-            loaded: false,
         }
     }
     pub fn n_voxels(&self) -> usize {
@@ -84,13 +74,9 @@ impl ChunkBitmask {
 #[derive(Clone, Debug)]
 pub struct ChunkUpdateRegions {
     pub regions: Vec<BufferCopy>,
-    pub loaded: bool,
 }
 impl ChunkUpdateRegions {
     pub fn new() -> Self {
-        ChunkUpdateRegions {
-            regions: vec![],
-            loaded: false,
-        }
+        ChunkUpdateRegions { regions: vec![] }
     }
 }

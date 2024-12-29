@@ -16,26 +16,18 @@ impl<const N: usize> VoxelData<N> {
         VoxelData { lods }
     }
 
-    pub fn update_staging_buffers(&mut self, updates: Vec<Vec<Option<Vec<VoxelLODUpdate>>>>) {
-        for (lvl_updates, lvl) in updates.into_iter().zip(self.lods.iter_mut()) {
-            for (lod_updates_o, lod_o) in lvl_updates.into_iter().zip(lvl.iter_mut()) {
-                match (lod_updates_o, lod_o) {
-                    (Some(lod_updates), Some(lod)) => {
-                        for update in lod_updates {
-                            lod.update_staging_buffers(update);
-                        }
-                    }
-                    (None, None) => {}
-                    _ => panic!(),
-                }
+    pub fn update_staging_buffers(&mut self, updates: [Vec<VoxelLODUpdate>; N]) {
+        for (lod, updates) in self.lods.iter_mut().zip(updates.into_iter()) {
+            for update in updates {
+                lod.update_staging_buffers(update);
             }
         }
     }
 }
 
-impl DataComponentSet for VoxelData {
+impl<const N: usize> DataComponentSet for VoxelData<N> {
     fn bind(&self, descriptor_writes: &mut Vec<WriteDescriptorSet>) {
-        for lod in self.lods.iter().flatten().flatten() {
+        for lod in self.lods.iter() {
             lod.bind(descriptor_writes);
         }
     }
@@ -44,7 +36,7 @@ impl DataComponentSet for VoxelData {
         &self,
         builder: &mut AutoCommandBufferBuilder<L, A>,
     ) {
-        for lod in self.lods.iter().flatten().flatten() {
+        for lod in self.lods.iter() {
             lod.record_repeated_buffer_transfer(builder);
         }
     }
@@ -53,7 +45,7 @@ impl DataComponentSet for VoxelData {
         &mut self,
         builder: &mut AutoCommandBufferBuilder<L, A>,
     ) {
-        for lod in self.lods.iter_mut().flatten().flatten() {
+        for lod in self.lods.iter_mut() {
             lod.record_buffer_transfer_jit(builder);
         }
     }

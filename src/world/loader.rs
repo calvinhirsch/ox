@@ -83,6 +83,11 @@ mod layer_chunk {
             &mut self.data
         }
 
+        pub unsafe fn get_for_loading(&self) -> &T {
+            debug_assert!(matches!(self.state(), LayerChunkState::Missing));
+            &self.data
+        }
+
         /// Set the state to "invalid"--if the current state is "missing", will return an Err(())
         pub unsafe fn set_invalid(&mut self) -> Result<(), ()> {
             match self.state() {
@@ -110,7 +115,7 @@ mod layer_chunk {
         }
     }
 }
-pub use layer_chunk::LayerChunk;
+pub use layer_chunk::{LayerChunk, LayerChunkState};
 
 /// Chunk data that can be loaded with a `ChunkLoader`. The `ChunkLoader` will first `mark_invalid` when
 /// the chunk is queued, then `take_data_for_loading`, send it to a separate thread, load the data, then
@@ -141,8 +146,8 @@ pub unsafe trait BorrowedChunk<C>: Send {
     unsafe fn mark_valid(&mut self);
 }
 
-pub struct ChunkLoader<QI, C, MD, BC: BorrowedChunk<C>> {
-    chunk_type: PhantomData<C>,
+pub struct ChunkLoader<QI, CE, MD, BC: BorrowedChunk<CE>> {
+    chunk_type: PhantomData<CE>,
     metadata_type: PhantomData<MD>,
     active_threads: Vec<Option<Receiver<BC>>>,
     queue: PriorityQueue<ChunkLoadQueueItem<QI>, u32>,
@@ -152,7 +157,7 @@ pub struct ChunkLoaderParams {
     pub n_threads: usize,
 }
 
-impl<QI, C, MD, BC: BorrowedChunk<C>> ChunkLoader<QI, C, MD, BC> {
+impl<QI, CE, MD, BC: BorrowedChunk<CE>> ChunkLoader<QI, CE, MD, BC> {
     pub fn new(params: ChunkLoaderParams) -> Self {
         ChunkLoader {
             chunk_type: PhantomData,
@@ -196,15 +201,15 @@ impl<QI, C, MD, BC: BorrowedChunk<C>> ChunkLoader<QI, C, MD, BC> {
 impl<
         QI: Clone + Send + 'static,
         MD: Clone + Send + 'static,
-        C: BorrowChunkForLoading,
-        BC: BorrowedChunk<C> + LoadChunk<QI, MD> + 'static, // why 'static? it's borrowed data but the refernces should be raw pointers
-    > ChunkLoader<QI, C, MD, BC>
+        CE: BorrowChunkForLoading,
+        BC: BorrowedChunk<CE> + LoadChunk<QI, MD> + 'static, // why 'static? it's borrowed data but the refernces should be raw pointers
+    > ChunkLoader<QI, CE, MD, BC>
 {
     /// Queues new chunks for loading and puts loaded chunks back in memory grid using editor.
     pub fn sync(
         &mut self,
         start_tlc: TLCPos<i64>,
-        editor: &mut MemoryGridEditor<C, MD>,
+        editor: &mut MemoryGridEditor<CE, MD>,
         queue: Vec<ChunkLoadQueueItem<QI>>,
         buffer_chunk_states: &[BufferChunkState; 3],
     ) {
@@ -235,7 +240,7 @@ impl<
         };
 
         let editor_chunk_i = |pos| {
-            ChunkLoader::<QI, C, MD, BC>::vgrid_index(
+            ChunkLoader::<QI, CE, MD, BC>::vgrid_index(
                 start_tlc,
                 grid_size,
                 buffer_chunk_states,

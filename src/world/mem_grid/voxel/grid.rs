@@ -2,7 +2,7 @@ use super::lod::{VoxelLODChunkEditor, VoxelLODCreateParams, VoxelMemoryGridLOD};
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::renderer::component::voxels::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
-use crate::world::loader::ChunkLoadQueueItem;
+use crate::world::loader::{ChunkLoadQueueItem, LayerChunkState};
 use crate::world::mem_grid::utils::{cubed, index_for_pos_in_tlc, IteratorWithIndexing};
 use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxels;
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
@@ -68,7 +68,9 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         start_tlc: TLCPos<i64>,
         lod_block_fill_thresh: f32,
     ) -> (Self, VoxelData<N>) {
-        lod_params.iter().map(|p| p.validate(chunk_size));
+        for p in lod_params.iter() {
+            p.validate(chunk_size);
+        }
         debug_assert!(
             lod_params.len()
                 == lod_params
@@ -82,19 +84,20 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         let (largest_lvl, largest_sublvl, size) = lod_params
             .iter()
             .map(|lod| (lod.lvl, lod.sublvl, lod.render_area_size))
-            .max_by_key(|x| x)
+            .max()
             .unwrap();
         let n_lvls = largest_lvl + 1;
-        let n_sublvls = chunk_size.log2() + 1;
+        let n_sublvls = (chunk_size.ilog2() + 1) as usize;
 
         let (grid_lods, lods) = unzip_array_of_tuple(lod_params.map(|params| {
+            let lod_tlc_size = Self::lod_tlc_size(chunk_size, n_lvls, params.lvl, params.sublvl);
+            let start_tlc = TLCPos(
+                start_tlc.0 + Vector3::from_value(((size - params.render_area_size) / 2) as i64),
+            );
             VoxelMemoryGridLOD::new_voxel_lod(
                 params,
-                TLCPos(
-                    start_tlc.0
-                        + Vector3::from_value(((size - params.render_area_size) / 2) as i64),
-                ),
-                Self::lod_tlc_size(chunk_size, n_lvls, params.lvl, params.sublvl),
+                start_tlc,
+                lod_tlc_size,
                 Arc::clone(&memory_allocator),
             )
         }));
@@ -121,11 +124,8 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         (grid, VoxelData::new(lods))
     }
 
-    pub fn get_updates(&mut self) -> Vec<Vec<VoxelLODUpdate>> {
-        self.lods
-            .iter_mut()
-            .map(|lod| lod.aggregate_updates(true))
-            .collect()
+    pub fn get_updates(&mut self) -> [Vec<VoxelLODUpdate>; N] {
+        self.lods.each_mut().map(|lod| lod.aggregate_updates(true))
     }
 
     fn apply_and_queue<F: FnMut(&mut VoxelMemoryGridLOD) -> Vec<ChunkLoadQueueItem<()>>>(
@@ -181,25 +181,22 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
 }
 
 impl<'a, const N: usize, VE: VoxelTypeEnum>
-    MemoryGridEditorChunk<'a, VoxelMemoryGrid<N>, VoxelMemoryGridMetadata>
-    for ChunkVoxelEditor<'a, VE>
+    MemoryGridEditorChunk<'a, VoxelMemoryGrid<N>, &'a mut VoxelMemoryGridMetadata>
+    for ChunkVoxelEditor<'a, VE, N>
 {
     fn edit_grid_with_size(
         mem_grid: &'a mut VoxelMemoryGrid<N>,
         grid_size: usize,
-    ) -> MemoryGridEditor<ChunkVoxelEditor<'a, VE>, VoxelMemoryGridMetadata> {
+    ) -> MemoryGridEditor<ChunkVoxelEditor<'a, VE, N>, &'a mut VoxelMemoryGridMetadata> {
         let start_tlc = mem_grid.start_tlc();
         let VoxelMemoryGrid { lods, metadata } = mem_grid;
         MemoryGridEditor {
-            chunks: crate::util::zip(
-                lods.into_iter()
-                    .map(|lod| {
-                        VoxelLODChunkEditor::edit_grid_with_size(lod, grid_size)
-                            .chunks
-                            .into_iter()
-                    })
-                    .collect::<[std::vec::IntoIter<_>; N]>(),
-            )
+            chunks: crate::util::zip(lods.each_mut().map(|lod| {
+                Option::<VoxelLODChunkEditor<_>>::edit_grid_with_size(lod, grid_size)
+                    .chunks
+                    .into_iter()
+            }))
+            .map(|chunk_lods| ChunkVoxelEditor { lods: chunk_lods })
             .collect(),
             size: grid_size,
             start_tlc,
@@ -208,55 +205,9 @@ impl<'a, const N: usize, VE: VoxelTypeEnum>
     }
 }
 
-struct LODSplitter<I: Iterator>(Vec<Vec<Option<I>>>);
-
-impl<I: Iterator> Iterator for LODSplitter<I> {
-    type Item = Vec<Vec<Option<I::Item>>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next_items: Vec<Vec<_>> = self
-            .0
-            .iter_mut()
-            .map(|iters| {
-                iters
-                    .iter_mut()
-                    .map(|iter| iter.as_mut().map(Iterator::next))
-                    .collect()
-            })
-            .collect();
-
-        // If any of the iterators are Some (meaning the LOD exists) but the item in it is None, then stop iterating
-        if next_items
-            .iter()
-            .any(|iters| iters.iter().any(|iter| matches!(iter, Some(None))))
-        {
-            // If one iterator is depleted, make sure all others are too
-            debug_assert!(
-                next_items.iter().any(|iters| iters
-                    .iter()
-                    .any(|iter| matches!(iter, Some(None)) || iter.is_none())),
-                "LOD chunk iterators passed to LODSplitter have different numbers of chunks."
-            );
-            return None;
-        }
-
-        Some(
-            next_items
-                .into_iter()
-                .map(|items| {
-                    items
-                        .into_iter()
-                        .map(|item| item.map(|i| i.unwrap()))
-                        .collect()
-                })
-                .collect(),
-        )
-    }
-}
-
 #[derive(Debug)]
-pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum> {
-    lods: Vec<Vec<Option<VoxelLODChunkEditor<'a, VE>>>>,
+pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum, const N: usize> {
+    lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
 pub enum SetVoxelErr {
@@ -265,57 +216,65 @@ pub enum SetVoxelErr {
     LODVoxelsNotLoaded,
 }
 
-impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
-    pub fn load_new<F: Fn(TLCPos<i64>, usize, usize, &mut ChunkVoxels)>(
+impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
+    /// Load a chunk using `gen_func` to generate the voxel data where needed.
+    /// Unsafe because it will access the chunk's data when it is in "missing" state.
+    /// Presumably, this function is being called in a chunk loading thread having borrowed
+    /// the chunk data.
+    pub unsafe fn load_new<F: Fn(TLCPos<i64>, usize, usize, &mut ChunkVoxels)>(
         &'a mut self,
         pos: TLCPos<i64>,
-        lods_to_load: Vec<Vec<bool>>,
+        lods_to_load: [bool; N],
         gen_func: F,
         chunk_size: usize,
         n_chunk_lvls: usize,
         n_lods: usize,
         lod_block_fill_thresh: f32,
     ) {
-        println!("\npos {:?}", pos);
         // Last lvl/LOD that contained voxel ID info
-        let (mut last_vox_lvl, mut last_vox_lod) = (None, None);
+        let (mut last_vox_lvl, mut last_vox_sublvl, mut last_vox_idx) = (None, None, None);
         // Last lvl/LOD that contained bitmask info
-        let (mut last_bitmask_lvl, mut last_bitmask_lod) = (None, None);
+        let (mut last_bitmask_lvl, mut last_bitmask_sublvl, mut last_bitmask_idx) =
+            (None, None, None);
 
-        let lods: Vec<_> = self.lods.iter_mut().flatten().collect();
-
-        let len = lods.len();
-        IteratorWithIndexing::new(lods, len).apply(|i, lod, lods_to_index| {
-            let lvl_i = i / n_lods;
-            let lod_i = i % n_lods;
-            let load = lods_to_load[lvl_i][lod_i];
+        let len = self.lods.len();
+        IteratorWithIndexing::new(&mut self.lods, len).apply(|i, lod, lods_to_index| {
+            let load = lods_to_load[i];
 
             if let Some(lod_data) = lod {
+                let lvl = lod_data.lvl() as usize;
+                let sublvl = lod_data.sublvl() as usize;
                 if load {
                     debug_assert!(
-                        !lod_data.bitmask().loaded,
+                        matches!(lod_data.data_mut().state(), LayerChunkState::Invalid),
                         "Trying to load into already loaded chunk {:?} ({}, {})",
                         pos,
-                        lvl_i,
-                        lod_i
-                    ); // Should have been marked not loaded before loading
-                    lod_data.set_loaded();
+                        lod_data.lvl(),
+                        lod_data.sublvl(),
+                    ); // Should have been marked invalid before loading
+
+                    let data = unsafe { lod_data.data_mut().get_mut_for_loading() };
 
                     // Need to load the info in this chunk
-                    if lod_data.has_voxel_ids() {
-                        if let (Some(l_lvl), Some(l_lod)) = (last_vox_lvl, last_vox_lod) {
+                    if let Some(mut data) = data.with_voxel_ids_mut() {
+                        if let (Some(l_lvl), Some(l_sublvl), Some(l_i)) =
+                            (last_vox_lvl, last_vox_sublvl, last_vox_idx)
+                        {
                             // Load voxels based on higher fidelity LOD that is already loaded
-                            (*lod_data).calc_from_lower_lod_voxels(
-                                lods_to_index[l_lvl * n_lods + l_lod]
-                                    .as_ref()
-                                    .unwrap()
-                                    .voxels()
-                                    .as_ref()
-                                    .unwrap(),
-                                lvl_i,
-                                lod_i,
+                            data.calc_from_lower_lod_voxels::<VE>(
+                                unsafe {
+                                    lods_to_index[l_i]
+                                        .as_ref()
+                                        .unwrap()
+                                        .data()
+                                        .get_for_loading()
+                                        .with_voxel_ids()
+                                        .unwrap()
+                                },
+                                lvl,
+                                sublvl,
                                 l_lvl,
-                                l_lod,
+                                l_sublvl,
                                 chunk_size,
                                 n_chunk_lvls,
                                 n_lods,
@@ -323,23 +282,25 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                             );
                         } else {
                             // Generate voxels
-                            gen_func(pos, lvl_i, lod_i, lod_data.overwrite().voxels);
+                            gen_func(pos, lvl, sublvl, data.overwrite::<VE>().voxel_ids);
                         }
 
-                        last_vox_lvl = Some(lvl_i);
-                        last_vox_lod = Some(lod_i);
+                        last_vox_lvl = Some(lod_data.lvl() as usize);
+                        last_vox_sublvl = Some(lod_data.sublvl() as usize);
                     } else {
                         // If this chunk only has a bitmask, update from previous LOD bitmask
-                        lod_data.update_bitmask_from_lower_lod(
-                            lods_to_index
-                                [last_bitmask_lvl.unwrap() * n_lods + last_bitmask_lod.unwrap()]
-                            .as_ref()
-                            .unwrap()
-                            .bitmask(),
-                            lvl_i,
-                            lod_i,
+                        data.update_bitmask_from_lower_lod(
+                            unsafe {
+                                lods_to_index[last_bitmask_idx.unwrap()]
+                                    .as_ref()
+                                    .unwrap()
+                                    .data()
+                                    .get_for_loading()
+                            },
+                            lvl,
+                            sublvl,
                             last_bitmask_lvl.unwrap(),
-                            last_bitmask_lod.unwrap(),
+                            last_bitmask_sublvl.unwrap(),
                             chunk_size,
                             n_chunk_lvls,
                             n_lods,
@@ -347,16 +308,18 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
                         )
                     }
 
-                    last_bitmask_lvl = Some(lvl_i);
-                    last_bitmask_lod = Some(lod_i);
-                } else if lod_data.bitmask().loaded {
-                    last_bitmask_lod = Some(lod_i);
-                    last_bitmask_lvl = Some(lvl_i);
+                    last_bitmask_lvl = Some(lvl);
+                    last_bitmask_sublvl = Some(sublvl);
+                } else if let Some(data) = lod_data.data_mut().get() {
+                    last_bitmask_sublvl = Some(sublvl);
+                    last_bitmask_lvl = Some(lvl);
+                    last_bitmask_idx = Some(i);
 
                     // Note: voxels should only ever be loaded when the bitmask is
-                    if let Some(true) = lod_data.voxels().as_ref().map(|v| v.loaded) {
-                        last_vox_lvl = Some(lvl_i);
-                        last_vox_lod = Some(lod_i);
+                    if data.with_voxel_ids().is_some() {
+                        last_vox_lvl = Some(lvl);
+                        last_vox_sublvl = Some(sublvl);
+                        last_vox_idx = Some(i);
                     }
                 }
             }
@@ -369,17 +332,16 @@ impl<'a, VE: VoxelTypeEnum> ChunkVoxelEditor<'a, VE> {
         voxel_typ: VE,
         meta: &VoxelMemoryGridMetadata,
     ) {
-        for lvl in 0..meta.n_lvls {
-            for lod in 0..meta.n_lods {
-                if let Some(data) = self.lods[lvl][lod].as_mut() {
-                    if let Some(voxels) = data.voxels().as_ref() {
-                        if voxels.loaded {
-                            let block_size =
-                                meta.chunk_size.pow(lvl as u32) * 2usize.pow(lod as u32);
-                            data.set_voxel(index_in_tlc / cubed(block_size), voxel_typ);
-                        }
-                    }
-                }
+        for lod in self.lods.iter_mut().filter_map(|x| x.as_mut()) {
+            let (lvl, sublvl) = (lod.lvl(), lod.sublvl());
+            if let Some(mut data) = lod
+                .data_mut()
+                .get_mut()
+                .map(|d| d.with_voxel_ids_mut())
+                .flatten()
+            {
+                let block_size = meta.chunk_size.pow(lvl as u32) * 2usize.pow(sublvl as u32);
+                data.set_voxel(index_in_tlc / cubed(block_size), voxel_typ);
             }
         }
     }

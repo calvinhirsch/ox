@@ -1,5 +1,5 @@
 use cgmath::{Array, EuclideanSpace, Point3, Vector3};
-use loader::BorrowedChunk;
+use loader::{BorrowChunkForLoading, BorrowedChunk};
 use mem_grid::MemoryGridEditorChunk;
 use num_traits::Zero;
 use std::marker::PhantomData;
@@ -39,15 +39,15 @@ pub struct WorldMetadata {
 
 pub struct World<
     QI,
-    C: LoadChunk<QI, MD> + Clone + Send,
-    BC: BorrowedChunk<C>,
+    CE,
+    BC: BorrowedChunk<CE>,
     MD: Clone + Send,
     MG: MemoryGrid<ChunkLoadQueueItemData = QI>,
 > {
     metadata_type: PhantomData<MD>,
 
     pub mem_grid: MG,
-    chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, C, MD, BC>,
+    chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, CE, MD, BC>,
     chunks_to_load: Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>>,
     camera: Camera,
     metadata: WorldMetadata,
@@ -197,16 +197,14 @@ impl<
 
 impl<
         'a,
-        QI: Clone + Send,
-        C: LoadChunk<QI, MD> + Clone + Send,
-        BC: BorrowedChunk<C>,
-        MD: Clone + Send,
+        QI: Clone + Send + 'static,
+        CE: BorrowChunkForLoading + MemoryGridEditorChunk<'a, MG, MD>,
+        BC: BorrowedChunk<CE> + LoadChunk<QI, MD> + 'static,
+        MD: Clone + Send + 'static,
         MG: MemoryGrid<ChunkLoadQueueItemData = QI>,
-    > World<QI, C, BC, MD, MG>
+    > World<QI, CE, BC, MD, MG>
 {
-    pub fn edit<MGMD, CE: MemoryGridEditorChunk<'a, MG, MGMD>>(
-        &'a mut self,
-    ) -> WorldEditor<'a, CE, MD> {
+    pub fn edit(&'a mut self) -> WorldEditor<'a, CE, MD> {
         // Sync with chunk loader and queue new chunks to load
         let start_tlc = self.mem_grid.start_tlc();
         let chunks_to_load = mem::take(&mut self.chunks_to_load);

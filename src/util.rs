@@ -1,14 +1,10 @@
-struct Zip<I: Iterator, const N: usize>([I; N]);
+pub struct Zip<I: Iterator, const N: usize>([I; N]);
 
 impl<I: Iterator, const N: usize> Iterator for Zip<I, N> {
     type Item = [I::Item; N];
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next_items: [_; N] = self
-            .0
-            .iter_mut()
-            .map(|iter| iter.as_mut().map(Iterator::next))
-            .collect();
+        let next_items: [_; N] = self.0.each_mut().map(Iterator::next);
 
         if next_items.iter().any(|item| item.is_none()) {
             // If one iterator is depleted, make sure all others are too
@@ -19,7 +15,7 @@ impl<I: Iterator, const N: usize> Iterator for Zip<I, N> {
             return None;
         }
 
-        Some(next_items)
+        Some(next_items.map(|i| i.unwrap()))
     }
 }
 
