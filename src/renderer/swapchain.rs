@@ -1,4 +1,4 @@
-use crate::renderer::component::{DataComponentSet};
+use crate::renderer::component::DataComponentSet;
 use crate::renderer::pipeline::ComputeRenderPipeline;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,12 +8,11 @@ use vulkano::device::physical::PhysicalDevice;
 use vulkano::device::{Device, Queue};
 use vulkano::image::{Image, ImageUsage};
 use vulkano::shader::ShaderModule;
-use vulkano::{swapchain, sync, Validated, VulkanError};
 use vulkano::swapchain::{Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo};
-use vulkano::sync::future::{FenceSignalFuture};
+use vulkano::sync::future::FenceSignalFuture;
 use vulkano::sync::GpuFuture;
+use vulkano::{swapchain, sync, Validated, VulkanError};
 use winit::dpi::PhysicalSize;
-
 
 pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator> {
     pub subgroup_width: u32,
@@ -26,7 +25,10 @@ pub struct SwapchainPipelineParams<DSA: DescriptorSetAllocator, CBA: CommandBuff
 
 pub type GpuFence = FenceSignalFuture<Box<dyn GpuFuture>>;
 
-pub struct SwapchainPipeline<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static> {
+pub struct SwapchainPipeline<
+    DSA: DescriptorSetAllocator + 'static,
+    CBA: CommandBufferAllocator + 'static,
+> {
     params: SwapchainPipelineParams<DSA, CBA>,
     images: Vec<Arc<Image>>,
     graphics_queue: Arc<Queue>,
@@ -39,7 +41,9 @@ pub struct SwapchainPipeline<DSA: DescriptorSetAllocator + 'static, CBA: Command
     prev_fence_i: u32,
 }
 
-impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static> SwapchainPipeline<DSA, CBA> {
+impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'static>
+    SwapchainPipeline<DSA, CBA>
+{
     pub fn new(
         device: Arc<Device>,
         compute_queue: Arc<Queue>,
@@ -50,31 +54,34 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
         surface: Arc<Surface>,
         params: SwapchainPipelineParams<DSA, CBA>,
     ) -> Self {
-        let (swapchain, images) = {
+        let (swapchain, images) = (|| {
             let caps = physical_device
                 .surface_capabilities(&surface, Default::default())
                 .expect("failed to get surface capabilities");
 
             let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
-            let image_format = physical_device
+            for (image_format, _) in physical_device
                 .surface_formats(&surface, Default::default())
-                .unwrap()[0]
-                .0;
+                .unwrap()
+            {
+                if let Ok(stuff) = Swapchain::new(
+                    Arc::clone(&device),
+                    surface.clone(),
+                    SwapchainCreateInfo {
+                        min_image_count: caps.min_image_count,
+                        image_format,
+                        image_extent: dimensions.into(),
+                        image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+                        composite_alpha,
+                        ..Default::default()
+                    },
+                ) {
+                    return stuff;
+                }
+            }
 
-            Swapchain::new(
-                Arc::clone(&device),
-                surface.clone(),
-                SwapchainCreateInfo {
-                    min_image_count: caps.min_image_count,
-                    image_format,
-                    image_extent: dimensions.into(),
-                    image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
-                    composite_alpha,
-                    ..Default::default()
-                },
-            )
-            .unwrap()
-        };
+            panic!("Failed to create swapchain.");
+        })();
 
         let pipeline = ComputeRenderPipeline::new(
             params.subgroup_width,
@@ -123,7 +130,7 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
         self.recreate_with_dims(self.swapchain.image_extent());
     }
 
-    pub fn recreate_with_dims(&mut self, dimensions: impl Into<[u32; 2]>,) {
+    pub fn recreate_with_dims(&mut self, dimensions: impl Into<[u32; 2]>) {
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent: dimensions.into(),
             ..self.swapchain.create_info()
@@ -141,23 +148,29 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
         }
     }
 
-    pub fn present(&mut self, device: Arc<Device>, transfer_fence: &Arc<FenceSignalFuture<Box<dyn GpuFuture>>>) {
+    pub fn present(
+        &mut self,
+        device: Arc<Device>,
+        transfer_fence: &Arc<FenceSignalFuture<Box<dyn GpuFuture>>>,
+    ) {
         if self.recreate {
             self.recreate();
             self.recreate = false;
         }
 
-        let (image_i, suboptimal, acquire_future) =
-            match swapchain::acquire_next_image(Arc::clone(&self.swapchain), Some(Duration::from_secs(3))) {
-                Ok(r) => r,
-                Err(Validated::Error(VulkanError::OutOfDate)) => {
-                    self.recreate = true;
-                    return;
-                }
-                Err(_e) => {
-                    panic!("failed to acquire next image: {_e:?}")
-                },
-            };
+        let (image_i, suboptimal, acquire_future) = match swapchain::acquire_next_image(
+            Arc::clone(&self.swapchain),
+            Some(Duration::from_secs(3)),
+        ) {
+            Ok(r) => r,
+            Err(Validated::Error(VulkanError::OutOfDate)) => {
+                self.recreate = true;
+                return;
+            }
+            Err(_e) => {
+                panic!("failed to acquire next image: {_e:?}")
+            }
+        };
 
         if suboptimal {
             self.recreate = true;
@@ -184,8 +197,9 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
             .join(Arc::clone(transfer_fence))
             .join(acquire_future);
 
-        let compute_future =
-            (Box::new(self.pipeline.execute(curr_future, image_i as usize)) as Box<dyn GpuFuture>).then_signal_fence_and_flush();
+        let compute_future = (Box::new(self.pipeline.execute(curr_future, image_i as usize))
+            as Box<dyn GpuFuture>)
+            .then_signal_fence_and_flush();
 
         self.compute_fence = match compute_future {
             Ok(value) => Some(Arc::new(value)),
@@ -196,12 +210,12 @@ impl<DSA: DescriptorSetAllocator + 'static, CBA: CommandBufferAllocator + 'stati
         };
 
         let future = (Box::new(
-            Arc::clone(self.compute_fence.as_ref().unwrap())
-                .then_swapchain_present(
-                    Arc::clone(&self.graphics_queue),
-                    SwapchainPresentInfo::swapchain_image_index(Arc::clone(&self.swapchain), image_i),
-                )
-        ) as Box<dyn GpuFuture>).then_signal_fence_and_flush();
+            Arc::clone(self.compute_fence.as_ref().unwrap()).then_swapchain_present(
+                Arc::clone(&self.graphics_queue),
+                SwapchainPresentInfo::swapchain_image_index(Arc::clone(&self.swapchain), image_i),
+            ),
+        ) as Box<dyn GpuFuture>)
+            .then_signal_fence_and_flush();
 
         self.present_fences[image_i as usize] = match future {
             Ok(value) => Some(Arc::new(value)),
