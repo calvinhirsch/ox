@@ -1,4 +1,6 @@
-use super::lod::{VoxelLODChunkEditor, VoxelLODCreateParams, VoxelMemoryGridLOD};
+use super::lod::{
+    BorrowedVoxelLODChunkEditor, VoxelLODChunkEditor, VoxelLODCreateParams, VoxelMemoryGridLOD,
+};
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::renderer::component::voxels::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
@@ -8,7 +10,7 @@ use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxels;
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
 use crate::world::{TLCPos, TLCVector, VoxelPos};
 use cgmath::{Array, EuclideanSpace, Vector3};
-use getset::Getters;
+use getset::{CopyGetters, Getters};
 use hashbrown::{HashMap, HashSet};
 use std::sync::Arc;
 use unzip_array_of_tuple::unzip_array_of_tuple;
@@ -27,23 +29,30 @@ pub struct LodId {
     sublvl: usize,
 }
 
-#[derive(Clone, Debug, Getters)]
+#[derive(Clone, Debug, CopyGetters)]
 pub struct VoxelMemoryGridMetadata {
-    #[getset(get_copy = "pub")]
+    #[get_copy = "pub"]
     largest_lod: LodId, // which (lvl, sublvl) has the largest grid size
-    #[get = "pub"]
+    #[get_copy = "pub"]
     chunk_size: usize,
-    #[get = "pub"]
+    #[get_copy = "pub"]
     n_lvls: usize,
-    #[get = "pub"]
+    #[get_copy = "pub"]
     n_sublvls: usize,
-    #[get = "pub"]
+    #[get_copy = "pub"]
     lod_block_fill_thresh: f32,
 }
 
 #[derive(Clone, Debug)]
 pub struct VoxelChunkLoadQueueItemData<const N: usize> {
     pub lods: [bool; N],
+}
+
+impl VoxelMemoryGridMetadata {
+    pub fn tlc_size(&self) -> usize {
+        self.chunk_size.pow(self.largest_lod.lvl as u32)
+            * 2usize.pow(self.largest_lod.sublvl as u32)
+    }
 }
 
 impl<const N: usize> VoxelMemoryGrid<N> {
@@ -217,113 +226,14 @@ pub enum SetVoxelErr {
 }
 
 impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
-    /// Load a chunk using `gen_func` to generate the voxel data where needed.
-    /// Unsafe because it will access the chunk's data when it is in "missing" state.
-    /// Presumably, this function is being called in a chunk loading thread having borrowed
-    /// the chunk data.
-    pub unsafe fn load_new<F: Fn(TLCPos<i64>, usize, usize, &mut ChunkVoxels)>(
-        &'a mut self,
-        pos: TLCPos<i64>,
-        lods_to_load: [bool; N],
-        gen_func: F,
-        chunk_size: usize,
-        n_chunk_lvls: usize,
-        n_lods: usize,
-        lod_block_fill_thresh: f32,
-    ) {
-        // Last lvl/LOD that contained voxel ID info
-        let (mut last_vox_lvl, mut last_vox_sublvl, mut last_vox_idx) = (None, None, None);
-        // Last lvl/LOD that contained bitmask info
-        let (mut last_bitmask_lvl, mut last_bitmask_sublvl, mut last_bitmask_idx) =
-            (None, None, None);
-
-        let len = self.lods.len();
-        IteratorWithIndexing::new(&mut self.lods, len).apply(|i, lod, lods_to_index| {
-            let load = lods_to_load[i];
-
-            if let Some(lod_data) = lod {
-                let lvl = lod_data.lvl() as usize;
-                let sublvl = lod_data.sublvl() as usize;
-                if load {
-                    debug_assert!(
-                        matches!(lod_data.data_mut().state(), LayerChunkState::Invalid),
-                        "Trying to load into already loaded chunk {:?} ({}, {})",
-                        pos,
-                        lod_data.lvl(),
-                        lod_data.sublvl(),
-                    ); // Should have been marked invalid before loading
-
-                    let data = unsafe { lod_data.data_mut().get_mut_for_loading() };
-
-                    // Need to load the info in this chunk
-                    if let Some(mut data) = data.with_voxel_ids_mut() {
-                        if let (Some(l_lvl), Some(l_sublvl), Some(l_i)) =
-                            (last_vox_lvl, last_vox_sublvl, last_vox_idx)
-                        {
-                            // Load voxels based on higher fidelity LOD that is already loaded
-                            data.calc_from_lower_lod_voxels::<VE>(
-                                unsafe {
-                                    lods_to_index[l_i]
-                                        .as_ref()
-                                        .unwrap()
-                                        .data()
-                                        .get_for_loading()
-                                        .with_voxel_ids()
-                                        .unwrap()
-                                },
-                                lvl,
-                                sublvl,
-                                l_lvl,
-                                l_sublvl,
-                                chunk_size,
-                                n_chunk_lvls,
-                                n_lods,
-                                lod_block_fill_thresh,
-                            );
-                        } else {
-                            // Generate voxels
-                            gen_func(pos, lvl, sublvl, data.overwrite::<VE>().voxel_ids);
-                        }
-
-                        last_vox_lvl = Some(lod_data.lvl() as usize);
-                        last_vox_sublvl = Some(lod_data.sublvl() as usize);
-                    } else {
-                        // If this chunk only has a bitmask, update from previous LOD bitmask
-                        data.update_bitmask_from_lower_lod(
-                            unsafe {
-                                lods_to_index[last_bitmask_idx.unwrap()]
-                                    .as_ref()
-                                    .unwrap()
-                                    .data()
-                                    .get_for_loading()
-                            },
-                            lvl,
-                            sublvl,
-                            last_bitmask_lvl.unwrap(),
-                            last_bitmask_sublvl.unwrap(),
-                            chunk_size,
-                            n_chunk_lvls,
-                            n_lods,
-                            lod_block_fill_thresh,
-                        )
-                    }
-
-                    last_bitmask_lvl = Some(lvl);
-                    last_bitmask_sublvl = Some(sublvl);
-                } else if let Some(data) = lod_data.data_mut().get() {
-                    last_bitmask_sublvl = Some(sublvl);
-                    last_bitmask_lvl = Some(lvl);
-                    last_bitmask_idx = Some(i);
-
-                    // Note: voxels should only ever be loaded when the bitmask is
-                    if data.with_voxel_ids().is_some() {
-                        last_vox_lvl = Some(lvl);
-                        last_vox_sublvl = Some(sublvl);
-                        last_vox_idx = Some(i);
-                    }
-                }
+    pub unsafe fn mark_all_lods_invalid(&mut self) -> Result<(), ()> {
+        let mut r = Ok(());
+        for lod_o in self.lods.iter_mut() {
+            if let Some(lod) = lod_o {
+                r = r.or(lod.data_mut().set_invalid());
             }
-        });
+        }
+        r
     }
 
     pub fn set_voxel(
@@ -357,6 +267,152 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
             voxel_typ,
             meta,
         );
+    }
+
+    pub fn no_missing_lods(&self) -> bool {
+        for lod in self.lods.iter() {
+            if let Some(lod) = lod {
+                if matches!(lod.data().state(), LayerChunkState::Missing) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+#[derive(Debug)]
+pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
+    lods: [Option<BorrowedVoxelLODChunkEditor<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+}
+
+impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
+    pub fn new(ce: &mut ChunkVoxelEditor<VE, N>) -> Self {
+        Self {
+            lods: ce.lods.each_mut().map(|lod_o| {
+                lod_o
+                    .as_mut()
+                    .map(|lod| BorrowedVoxelLODChunkEditor::new(lod))
+            }),
+        }
+    }
+
+    /// Load a chunk using `gen_func` to generate the voxel data where needed.
+    /// Unsafe because it will access the chunk's data when it is in "missing" state.
+    /// Presumably, this function is being called in a chunk loading thread having borrowed
+    /// the chunk data.
+    pub unsafe fn load_new<F: Fn(TLCPos<i64>, usize, usize, &mut ChunkVoxels, usize, usize)>(
+        &mut self,
+        pos: TLCPos<i64>,
+        lods_to_load: [bool; N],
+        gen_func: F,
+        chunk_size: usize,
+        tlc_size: usize,
+        n_chunk_lvls: usize,
+        n_lods: usize,
+        lod_block_fill_thresh: f32,
+    ) {
+        // Last lvl/sublvl that contained voxel ID info
+        let (mut last_vox_lvl, mut last_vox_sublvl, mut last_vox_idx) = (None, None, None);
+        // Last lvl/sublvl that contained bitmask info
+        let (mut last_bitmask_lvl, mut last_bitmask_sublvl, mut last_bitmask_idx) =
+            (None, None, None);
+
+        let len = self.lods.len();
+        IteratorWithIndexing::new(&mut self.lods, len).apply(|i, lod, lods_to_index| {
+            let load = lods_to_load[i];
+
+            if let Some(lod_data) = lod {
+                let lvl = lod_data.lvl() as usize;
+                let sublvl = lod_data.sublvl() as usize;
+                if load {
+                    debug_assert!(
+                        matches!(
+                            unsafe { &**lod_data.data() }.state(),
+                            LayerChunkState::Invalid
+                        ),
+                        "Trying to load into already loaded chunk {:?} ({}, {})",
+                        pos,
+                        lod_data.lvl(),
+                        lod_data.sublvl(),
+                    ); // Should have been marked invalid before loading
+
+                    let data = unsafe { (&mut **lod_data.data_mut()).get_mut_for_loading() };
+
+                    // Need to load the info in this chunk
+                    if let Some(mut data) = data.with_voxel_ids_mut() {
+                        if let (Some(l_lvl), Some(l_sublvl), Some(l_i)) =
+                            (last_vox_lvl, last_vox_sublvl, last_vox_idx)
+                        {
+                            // Load voxels based on higher fidelity LOD that is already loaded
+                            data.calc_from_lower_lod_voxels::<VE>(
+                                unsafe {
+                                    (&**lods_to_index[l_i].as_ref().unwrap().data())
+                                        .get_for_loading()
+                                        .with_voxel_ids()
+                                        .unwrap()
+                                },
+                                lvl,
+                                sublvl,
+                                l_lvl,
+                                l_sublvl,
+                                chunk_size,
+                                n_chunk_lvls,
+                                n_lods,
+                                lod_block_fill_thresh,
+                            );
+                        } else {
+                            // Generate voxels
+                            gen_func(
+                                pos,
+                                lvl,
+                                sublvl,
+                                data.overwrite::<VE>().voxel_ids,
+                                tlc_size,
+                                n_chunk_lvls,
+                            );
+                        }
+
+                        last_vox_lvl = Some(lvl);
+                        last_vox_sublvl = Some(sublvl);
+                        last_vox_idx = Some(i);
+                    } else {
+                        // If this chunk only has a bitmask, update from previous LOD bitmask
+                        data.update_bitmask_from_lower_lod(
+                            unsafe {
+                                (&**lods_to_index[last_bitmask_idx.unwrap()]
+                                    .as_ref()
+                                    .unwrap()
+                                    .data())
+                                    .get_for_loading()
+                            },
+                            lvl,
+                            sublvl,
+                            last_bitmask_lvl.unwrap(),
+                            last_bitmask_sublvl.unwrap(),
+                            chunk_size,
+                            n_chunk_lvls,
+                            n_lods,
+                            lod_block_fill_thresh,
+                        )
+                    }
+
+                    last_bitmask_lvl = Some(lvl);
+                    last_bitmask_sublvl = Some(sublvl);
+                    last_bitmask_idx = Some(i);
+                }
+            }
+        });
+    }
+
+    pub unsafe fn set_all_lods_valid(&mut self) {
+        for lod_o in self.lods.iter_mut() {
+            if let Some(lod) = lod_o {
+                unsafe {
+                    (&mut **lod.data_mut()).set_valid();
+                }
+            }
+        }
     }
 }
 

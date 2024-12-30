@@ -23,7 +23,7 @@ pub struct VoxelLODCreateParams {
     pub sublvl: usize,
     pub render_area_size: usize, // size in chunks of one dimension, so total chunks loaded = render_area_size^3
     pub bitmask_binding: u32,
-    pub voxel_types_binding: Option<u32>,
+    pub voxel_ids_binding: Option<u32>,
 }
 impl VoxelLODCreateParams {
     pub fn validate(&self, chunk_size: usize) {
@@ -56,7 +56,7 @@ impl VoxelMemoryGridLOD {
     ) -> (Self, RendererVoxelLOD) {
         let bitmask =
             vec![ChunkBitmask::new_blank(cubed(lod_tlc_size)); cubed(params.render_area_size)];
-        let voxels = params.voxel_types_binding.map(|_| {
+        let voxels = params.voxel_ids_binding.map(|_| {
             vec![Some(ChunkVoxels::new_blank(cubed(lod_tlc_size))); cubed(params.render_area_size)]
         });
         let renderer_lod = RendererVoxelLOD::new(
@@ -74,7 +74,7 @@ impl VoxelMemoryGridLOD {
                     .into_iter()
             }),
             params.bitmask_binding,
-            params.voxel_types_binding,
+            params.voxel_ids_binding,
             buffer_allocator,
         );
 
@@ -455,6 +455,35 @@ fn voxels_in_lower_lod(
             )
         }),
     )
+}
+
+#[derive(Debug, Getters, MutGetters, CopyGetters)]
+pub struct BorrowedVoxelLODChunkEditor<VE: VoxelTypeEnum> {
+    voxel_type_enum: PhantomData<VE>,
+    #[getset(get_mut = "pub", get = "pub")]
+    data: *mut LayerChunk<LODLayerData>,
+    #[get_copy = "pub"]
+    lvl: u8,
+    #[get_copy = "pub"]
+    sublvl: u8,
+}
+
+impl<VE: VoxelTypeEnum> BorrowedVoxelLODChunkEditor<VE> {
+    pub fn new(
+        VoxelLODChunkEditor {
+            voxel_type_enum: _,
+            data,
+            lvl,
+            sublvl,
+        }: &mut VoxelLODChunkEditor<VE>,
+    ) -> Self {
+        Self {
+            voxel_type_enum: PhantomData,
+            data: *data as *mut _,
+            lvl: *lvl,
+            sublvl: *sublvl,
+        }
+    }
 }
 
 /// Provides access to chunk voxels to edit and recalculates the full bitmask when dropped.

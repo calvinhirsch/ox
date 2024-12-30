@@ -252,6 +252,57 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
 //     }
 // }
 
+fn edit_grid_layer_with_size<
+    'a,
+    C,
+    MD,
+    CE,
+    F: Fn(&'a mut LayerChunk<C>, &'a MemoryGridLayerMetadata<MD>) -> CE,
+>(
+    mem_grid: &'a mut MemoryGridLayer<C, MD>,
+    grid_size: usize,
+    edit_chunk_f: F,
+) -> MemoryGridEditor<Option<CE>, &'a MemoryGridLayerMetadata<MD>> {
+    let mut vgrid: Vec<Option<CE>> = (0..grid_size.pow(3)).map(|_| None).collect();
+
+    // If this layer is smaller than full grid, add padding to virtual position so it
+    // is centered
+    let vgrid_positions: Vec<_> = (0..cubed(mem_grid.metadata().size))
+        .map(|i| {
+            mem_grid.virtual_grid_pos_for_grid_pos(
+                TLCVector(pos_for_index(i, mem_grid.metadata().size)),
+                grid_size,
+            )
+        })
+        .collect();
+
+    let start_tlc = mem_grid.metadata().start_tlc;
+    let metadata = &mem_grid.metadata;
+
+    for (chunk_data, vgrid_pos) in mem_grid.chunks.iter_mut().zip(vgrid_positions) {
+        vgrid[index_for_pos(vgrid_pos.0, grid_size)] = Some(edit_chunk_f(chunk_data, metadata));
+    }
+
+    MemoryGridEditor {
+        chunks: vgrid,
+        size: grid_size,
+        start_tlc,
+        metadata,
+    }
+}
+
+impl<'a, MD: 'static, C: 'static>
+    MemoryGridEditorChunk<'a, MemoryGridLayer<C, MD>, &'a MemoryGridLayerMetadata<MD>>
+    for Option<&'a mut LayerChunk<C>>
+{
+    fn edit_grid_with_size(
+        mem_grid: &'a mut MemoryGridLayer<C, MD>,
+        grid_size: usize,
+    ) -> MemoryGridEditor<Self, &'a MemoryGridLayerMetadata<MD>> {
+        edit_grid_layer_with_size(mem_grid, grid_size, |lc, _| lc)
+    }
+}
+
 impl<
         'a,
         MD: 'static,
@@ -264,31 +315,6 @@ impl<
         mem_grid: &'a mut MemoryGridLayer<C, MD>,
         grid_size: usize,
     ) -> MemoryGridEditor<Option<CE>, &'a MemoryGridLayerMetadata<MD>> {
-        let mut vgrid: Vec<Option<CE>> = (0..grid_size.pow(3)).map(|_| None).collect();
-
-        // If this layer is smaller than full grid, add padding to virtual position so it
-        // is centered
-        let vgrid_positions: Vec<_> = (0..cubed(mem_grid.metadata().size))
-            .map(|i| {
-                mem_grid.virtual_grid_pos_for_grid_pos(
-                    TLCVector(pos_for_index(i, mem_grid.metadata().size)),
-                    grid_size,
-                )
-            })
-            .collect();
-
-        let start_tlc = mem_grid.metadata().start_tlc;
-        let metadata = &mem_grid.metadata;
-
-        for (chunk_data, vgrid_pos) in mem_grid.chunks.iter_mut().zip(vgrid_positions) {
-            vgrid[index_for_pos(vgrid_pos.0, grid_size)] = Some(CE::edit(chunk_data, metadata));
-        }
-
-        MemoryGridEditor {
-            chunks: vgrid,
-            size: grid_size,
-            start_tlc,
-            metadata,
-        }
+        edit_grid_layer_with_size(mem_grid, grid_size, CE::edit)
     }
 }

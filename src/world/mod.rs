@@ -37,17 +37,11 @@ pub struct WorldMetadata {
     buffer_chunk_states: [BufferChunkState; 3],
 }
 
-pub struct World<
-    QI,
-    CE,
-    BC: BorrowedChunk<CE>,
-    MD: Clone + Send,
-    MG: MemoryGrid<ChunkLoadQueueItemData = QI>,
-> {
+pub struct World<QI, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> {
     metadata_type: PhantomData<MD>,
 
     pub mem_grid: MG,
-    chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, CE, MD, BC>,
+    chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, MD, BC>,
     chunks_to_load: Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>>,
     camera: Camera,
     metadata: WorldMetadata,
@@ -67,17 +61,10 @@ pub enum BufferChunkState {
     LoadedLower = 2,
 }
 
-impl<
-        QI,
-        C: LoadChunk<QI, MD> + Clone + Send,
-        BC: BorrowedChunk<C>,
-        MD: Clone + Send,
-        MG: MemoryGrid<ChunkLoadQueueItemData = QI>,
-    > World<QI, C, BC, MD, MG>
-{
+impl<QI, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> World<QI, BC, MD, MG> {
     pub fn new(
         mem_grid: MG,
-        chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, C, MD, BC>,
+        chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, MD, BC>,
         camera: Camera,
         tlc_size: usize,
         tlc_load_dist_thresh: u32,
@@ -196,15 +183,20 @@ impl<
 }
 
 impl<
-        'a,
         QI: Clone + Send + 'static,
-        CE: BorrowChunkForLoading + MemoryGridEditorChunk<'a, MG, MD>,
-        BC: BorrowedChunk<CE> + LoadChunk<QI, MD> + 'static,
+        BC: BorrowedChunk + LoadChunk<QI, MD> + 'static,
         MD: Clone + Send + 'static,
         MG: MemoryGrid<ChunkLoadQueueItemData = QI>,
-    > World<QI, CE, BC, MD, MG>
+    > World<QI, BC, MD, MG>
 {
-    pub fn edit(&'a mut self) -> WorldEditor<'a, CE, MD> {
+    pub fn edit<
+        'a,
+        CE: BorrowChunkForLoading<BC> + MemoryGridEditorChunk<'a, MG, MD>,
+        F: FnOnce(WorldEditor<CE, MD>),
+    >(
+        &'a mut self,
+        edit_f: F,
+    ) {
         // Sync with chunk loader and queue new chunks to load
         let start_tlc = self.mem_grid.start_tlc();
         let chunks_to_load = mem::take(&mut self.chunks_to_load);
@@ -216,9 +208,9 @@ impl<
             &self.metadata.buffer_chunk_states,
         );
 
-        WorldEditor {
+        edit_f(WorldEditor {
             mem_grid: mem_grid_editor,
             metadata: &self.metadata,
-        }
+        })
     }
 }

@@ -120,7 +120,7 @@ pub use layer_chunk::{LayerChunk, LayerChunkState};
 /// Chunk data that can be loaded with a `ChunkLoader`. The `ChunkLoader` will first `mark_invalid` when
 /// the chunk is queued, then `take_data_for_loading`, send it to a separate thread, load the data, then
 /// when loading is complete, `mark_valid` and release its pointer.
-pub unsafe trait BorrowChunkForLoading {
+pub unsafe trait BorrowChunkForLoading<BC> {
     // TODO: derive macro
 
     /// Called when chunk is first queued. Data in chunks is assumed to no longer be valid when they are
@@ -128,26 +128,28 @@ pub unsafe trait BorrowChunkForLoading {
     /// This should call `set_invalid` on all `LayerChunk`s. If any of them return `Err(())`, this should
     /// also return that. However, it should not short circuit.
     fn mark_invalid(&mut self) -> Result<(), ()>;
-}
-
-pub unsafe trait BorrowedChunk<C>: Send {
-    // TODO: derive macro
 
     /// Mark chunk data as taken for loading. This should call `set_missing` on all `LayerChunk`s. Then,
-    /// return a mutable raw pointer to self for the chunk loader to use.
+    /// construct and return self, which should be comprised of raw pointers to all the `LayerChunk
     fn take_data_for_loading(
-        chunk: &mut C,
+        &mut self,
         // chunk_qi: &ChunkLoadQueueItem<QI>,
         // metadata: &MD,
-    ) -> Self;
+    ) -> BC;
+}
+
+pub unsafe trait BorrowedChunk: Send {
+    // TODO: derive macro
 
     /// Mark all chunk data valid. Called by chunk loader from the main thread once `load` has been run.
     /// Should call `set_valid` on all `LayerChunk`s.
     unsafe fn mark_valid(&mut self);
 }
 
-pub struct ChunkLoader<QI, CE, MD, BC: BorrowedChunk<CE>> {
-    chunk_type: PhantomData<CE>,
+pub struct ChunkLoader<QI, MD, BC>
+where
+    BC: BorrowedChunk,
+{
     metadata_type: PhantomData<MD>,
     active_threads: Vec<Option<Receiver<BC>>>,
     queue: PriorityQueue<ChunkLoadQueueItem<QI>, u32>,
@@ -157,10 +159,9 @@ pub struct ChunkLoaderParams {
     pub n_threads: usize,
 }
 
-impl<QI, CE, MD, BC: BorrowedChunk<CE>> ChunkLoader<QI, CE, MD, BC> {
+impl<QI, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
     pub fn new(params: ChunkLoaderParams) -> Self {
         ChunkLoader {
-            chunk_type: PhantomData,
             metadata_type: PhantomData,
             active_threads: (0..params.n_threads).map(|_| None).collect(),
             queue: PriorityQueue::new(),
@@ -201,12 +202,11 @@ impl<QI, CE, MD, BC: BorrowedChunk<CE>> ChunkLoader<QI, CE, MD, BC> {
 impl<
         QI: Clone + Send + 'static,
         MD: Clone + Send + 'static,
-        CE: BorrowChunkForLoading,
-        BC: BorrowedChunk<CE> + LoadChunk<QI, MD> + 'static, // why 'static? it's borrowed data but the refernces should be raw pointers
-    > ChunkLoader<QI, CE, MD, BC>
+        BC: BorrowedChunk + LoadChunk<QI, MD> + 'static, // why 'static? it's borrowed data but the refernces should be raw pointers
+    > ChunkLoader<QI, MD, BC>
 {
     /// Queues new chunks for loading and puts loaded chunks back in memory grid using editor.
-    pub fn sync(
+    pub fn sync<CE: BorrowChunkForLoading<BC>>(
         &mut self,
         start_tlc: TLCPos<i64>,
         editor: &mut MemoryGridEditor<CE, MD>,
@@ -240,12 +240,7 @@ impl<
         };
 
         let editor_chunk_i = |pos| {
-            ChunkLoader::<QI, CE, MD, BC>::vgrid_index(
-                start_tlc,
-                grid_size,
-                buffer_chunk_states,
-                pos,
-            )
+            ChunkLoader::<QI, MD, BC>::vgrid_index(start_tlc, grid_size, buffer_chunk_states, pos)
         };
 
         // Add newly passed chunks to load into the chunk loader queue
@@ -272,7 +267,7 @@ impl<
                         let chunk = &mut editor.chunks[chunk_idx];
                         match chunk.mark_invalid() {
                             Ok(()) => {
-                                let mut chunk_data = BC::take_data_for_loading(chunk);
+                                let mut chunk_data = chunk.take_data_for_loading();
                                 thread::spawn(move || {
                                     chunk_data.load(item, meta);
                                     sender.send(chunk_data).unwrap_or_else(|e| {
