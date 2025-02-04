@@ -33,7 +33,10 @@ impl Context {
                     ext_validation_features: true,
                     ..Default::default()
                 }),
-                enabled_layers: vec!["VK_LAYER_KHRONOS_validation".to_string()],
+                enabled_layers: vec![
+                    "VK_LAYER_KHRONOS_validation".to_string(),
+                    // "VK_LAYER_LUNARG_api_dump".to_string(),
+                ],
                 enabled_validation_features: vec![
                     ValidationFeatureEnable::BestPractices,
                     ValidationFeatureEnable::GpuAssisted,

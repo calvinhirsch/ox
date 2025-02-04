@@ -1,13 +1,15 @@
 use crate::world::mem_grid::utils::index_for_pos;
 use crate::world::mem_grid::MemoryGridEditor;
 use crate::world::{BufferChunkState, TLCPos};
-use cgmath::{Array, MetricSpace, Vector3};
+use cgmath::{Array, EuclideanSpace, MetricSpace, Vector3};
+use getset::{CopyGetters, Getters};
 use priority_queue::PriorityQueue;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::mpsc::{sync_channel, Receiver, TryRecvError};
 use std::thread;
 
+#[derive(Debug)]
 pub struct ChunkLoadQueueItem<D> {
     pub pos: TLCPos<i64>,
     pub data: D,
@@ -30,7 +32,6 @@ pub trait LoadChunk<QI, MD> {
 
 mod layer_chunk {
     use std::cell::UnsafeCell;
-    use std::pin::Pin;
 
     #[derive(Clone, Copy, Debug)]
     pub enum LayerChunkState {
@@ -79,12 +80,20 @@ mod layer_chunk {
 
         /// Get data for loading, should be called from within a chunk loading thread
         pub unsafe fn get_mut_for_loading(&mut self) -> &mut T {
-            debug_assert!(matches!(self.state(), LayerChunkState::Missing));
+            debug_assert!(
+                matches!(self.state(), LayerChunkState::Missing),
+                "Expected missing, got state {:?}",
+                self.state()
+            );
             &mut self.data
         }
 
         pub unsafe fn get_for_loading(&self) -> &T {
-            debug_assert!(matches!(self.state(), LayerChunkState::Missing));
+            debug_assert!(
+                matches!(self.state(), LayerChunkState::Missing),
+                "Expected missing, got state {:?}",
+                self.state()
+            );
             &self.data
         }
 
@@ -103,14 +112,22 @@ mod layer_chunk {
         /// Setting the state to missing means that a chunk loading thread has borrowed this data. `self` is `Pin`
         /// here because if that ever happens, the data must never move, because the chunk loading thread keeps a
         /// raw pointer to this. If the data ever moves, that pointer will be invalidated.
-        pub fn set_missing(self: Pin<&mut Self>) {
-            debug_assert!(matches!(self.state(), LayerChunkState::Invalid));
-            *unsafe { self.get_unchecked_mut() }.state.get_mut() = LayerChunkState::Missing;
+        pub unsafe fn set_missing(&mut self) {
+            debug_assert!(
+                matches!(self.state(), LayerChunkState::Invalid),
+                "Expected invalid, got state {:?}",
+                self.state()
+            );
+            *self.state.get_mut() = LayerChunkState::Missing;
         }
 
         /// Set the state to "valid". State should be "missing" to do this according to the chunk loading process
         pub unsafe fn set_valid(&mut self) {
-            debug_assert!(matches!(self.state(), LayerChunkState::Missing));
+            debug_assert!(
+                matches!(self.state(), LayerChunkState::Missing),
+                "Expected missing, got state {:?}",
+                self.state()
+            );
             *self.state.get_mut() = LayerChunkState::Valid;
         }
     }
@@ -146,13 +163,21 @@ pub unsafe trait BorrowedChunk: Send {
     unsafe fn mark_valid(&mut self);
 }
 
+#[derive(Debug, Getters, CopyGetters)]
 pub struct ChunkLoader<QI, MD, BC>
 where
     BC: BorrowedChunk,
 {
     metadata_type: PhantomData<MD>,
     active_threads: Vec<Option<Receiver<BC>>>,
+    #[get = "pub"]
     queue: PriorityQueue<ChunkLoadQueueItem<QI>, u32>,
+    #[get_copy = "pub"]
+    queued_last: usize,
+    #[get_copy = "pub"]
+    started_loading_last: usize,
+    #[get_copy = "pub"]
+    finished_loading_last: usize,
 }
 
 pub struct ChunkLoaderParams {
@@ -165,7 +190,22 @@ impl<QI, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
             metadata_type: PhantomData,
             active_threads: (0..params.n_threads).map(|_| None).collect(),
             queue: PriorityQueue::new(),
+            queued_last: 0,
+            started_loading_last: 0,
+            finished_loading_last: 0,
         }
+    }
+
+    pub fn active_loading_threads(&self) -> usize {
+        self.active_threads
+            .iter()
+            .filter_map(|o| o.as_ref())
+            .count()
+    }
+
+    pub fn print_status(&self) {
+        println!("CHUNK LOADER:  in queue: {},  loading: {} ;  Last frame:  queued: {},  finished loading: {},  started loading: {}",
+            self.queue.len(), self.active_loading_threads(), self.queued_last(), self.started_loading_last(), self.finished_loading_last());
     }
 
     fn vgrid_index(
@@ -174,7 +214,7 @@ impl<QI, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
         buffer_chunk_states: &[BufferChunkState; 3],
         pos: TLCPos<i64>,
     ) -> Option<usize> {
-        let mut pt = pos.0 - start_tlc.0;
+        let mut pt = pos.0 - start_tlc.0.to_vec();
 
         // If position is outside vgrid, it may be a buffer chunk. Check if it is, and if not, return None
         for c in [0, 1, 2] {
@@ -195,7 +235,7 @@ impl<QI, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
             }
         }
 
-        Some(index_for_pos(pt.cast::<usize>()?, grid_size))
+        Some(index_for_pos(pt.cast::<u32>()?, grid_size))
     }
 }
 
@@ -213,11 +253,16 @@ impl<
         queue: Vec<ChunkLoadQueueItem<QI>>,
         buffer_chunk_states: &[BufferChunkState; 3],
     ) {
+        self.queued_last = queue.len();
+        self.started_loading_last = 0;
+        self.finished_loading_last = 0;
+
         // Receive chunks that have finished loading and put them in "chunks"
         for thread_slot in self.active_threads.iter_mut() {
             if let Some(receiver) = thread_slot {
                 match receiver.try_recv() {
                     Ok(mut chunk_data) => {
+                        self.finished_loading_last += 1;
                         unsafe { chunk_data.mark_valid() };
                         *thread_slot = None;
                     }
@@ -245,12 +290,8 @@ impl<
 
         // Add newly passed chunks to load into the chunk loader queue
         for item in queue {
-            // ENHANCEMENT: This is doing some duplicate work to get the chunk and invalidate chunk data as below
-            if let Some(chunk_idx) = editor_chunk_i(item.pos) {
-                let _ = editor.chunks[chunk_idx].mark_invalid(); // this is just to mark invalid, we don't care if it was fully successful here
-                let prio = priority(item.pos);
-                self.queue.push(item, prio);
-            }
+            let prio = priority(item.pos);
+            self.queue.push(item, prio);
         }
 
         // Enqueue new chunks for loading until queue is empty or there are no thread slots left
@@ -267,6 +308,7 @@ impl<
                         let chunk = &mut editor.chunks[chunk_idx];
                         match chunk.mark_invalid() {
                             Ok(()) => {
+                                self.started_loading_last += 1;
                                 let mut chunk_data = chunk.take_data_for_loading();
                                 thread::spawn(move || {
                                     chunk_data.load(item, meta);
@@ -296,6 +338,16 @@ impl<
 
         for (item, priority) in requeue {
             self.queue.push(item, priority);
+        }
+
+        // Mark all remaining chunks in queue as invalid--this is important for
+        //      (a) newly added chunks to the queue that have not been marked invalid yet
+        //      (b) chunks that are still in the queue that had some of their data recently returned by another chunk loading
+        //          thread (and thus set to "valid")
+        for (item, _) in self.queue.iter_mut() {
+            if let Some(chunk_idx) = editor_chunk_i(item.pos) {
+                let _ = editor.chunks[chunk_idx].mark_invalid();
+            }
         }
     }
 }

@@ -48,7 +48,7 @@ impl ChunkBitmask {
     }
 
     pub fn get(&self, index: usize) -> bool {
-        let bit = 1u128.to_le() << (index % 128);
+        let bit = 1u128 << (index % 128);
         (self.bitmask[index / 128].mask & bit) > 0
     }
 
@@ -61,12 +61,12 @@ impl ChunkBitmask {
     }
 
     pub fn set_block_true(&mut self, index: usize) {
-        let bit = 1u128.to_le() << (index % 128);
+        let bit = 1u128 << (index % 128);
         self.bitmask[index / 128].mask |= bit;
     }
 
     pub fn set_block_false(&mut self, index: usize) {
-        let bit = 1u128.to_le() << (index % 128);
+        let bit = 1u128 << (index % 128);
         self.bitmask[index / 128].mask &= !bit;
     }
 }

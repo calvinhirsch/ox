@@ -4,9 +4,8 @@ use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk
 use crate::world::{TLCPos, TLCVector};
 use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use getset::{Getters, MutGetters};
-use hashbrown::HashSet;
 
-use super::ChunkEditor;
+use super::{ChunkEditor, MemGridShift};
 
 #[derive(Clone, Debug, Getters)]
 pub struct MemoryGridLayerMetadata<MD> {
@@ -47,7 +46,7 @@ impl<C, MD> MemoryGridLayer<C, MD> {
     }
 
     pub fn calc_offsets(start_tlc: TLCPos<i64>, size: usize) -> Vector3<usize> {
-        amod(start_tlc.0.to_vec(), size)
+        amod(start_tlc.0, size).to_vec()
     }
     pub fn grid_pos_for_virtual_grid_pos(
         &self,
@@ -65,17 +64,19 @@ impl<C, MD> MemoryGridLayer<C, MD> {
 
     pub fn virtual_grid_pos_for_grid_pos(
         &self,
-        pos: TLCVector<usize>,
+        pos: TLCPos<u32>,
         vgrid_size: usize,
-    ) -> TLCVector<usize> {
+    ) -> TLCPos<u32> {
         let local_vgrid_pos = amod(
             pos.0.cast::<i64>().unwrap() - self.metadata.offsets.0.cast::<i64>().unwrap(),
             self.metadata.size,
-        );
-        TLCVector(
+        )
+        .cast::<u32>()
+        .unwrap();
+        TLCPos(
             local_vgrid_pos
-                + Vector3::<usize>::from_value(if self.metadata.size < vgrid_size {
-                    (vgrid_size - self.metadata.size) / 2
+                + Vector3::<u32>::from_value(if self.metadata.size < vgrid_size {
+                    ((vgrid_size - self.metadata.size) / 2) as u32
                 } else {
                     0
                 }),
@@ -106,110 +107,33 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
 
     fn shift(
         &mut self,
-        shift: TLCVector<i32>,
-        load_in_from_edge: TLCVector<i32>,
-        load_buffer: [bool; 3],
+        shift: &MemGridShift,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        self.metadata.offsets = TLCVector(amod(
-            self.metadata().offsets.0.cast::<i64>().unwrap() + shift.0.cast::<i64>().unwrap(),
-            self.size(),
-        ));
+        // Apply the shift to grid offset
+        self.metadata.offsets = TLCVector(
+            amod(
+                Point3::from_vec(
+                    self.metadata().offsets.0.cast::<i64>().unwrap()
+                        + shift.offset_delta().cast::<i64>().unwrap(),
+                ),
+                self.size(),
+            )
+            .to_vec(),
+        );
 
-        // ENHANCEMENT: Using a hash set here to remove duplicates, could probably do this smarter
-        //              and avoid duplicates logically.
+        // Queue all the chunks that need to be loaded based on the shift
+        shift.collect_chunks_to_load(self.metadata().size, self.metadata().start_tlc, |pos| {
+            ChunkLoadQueueItem { pos, data: () }
+        })
+    }
 
-        fn abc_pos<T: Into<i64>>(av: T, bv: T, cv: T, a: usize, b: usize, c: usize) -> TLCPos<i64> {
-            let mut chunk = Point3::<i64> { x: 0, y: 0, z: 0 };
-            chunk[a] = av.into();
-            chunk[b] = bv.into();
-            chunk[c] = cv.into();
-            TLCPos(chunk)
-        }
-
-        let mut chunk_set = HashSet::new();
-        let active_size = self.metadata().size - 1; // size of grid excluding buffer chunks
-
-        let mut queue_chunk = |vgrid_chunk: TLCPos<i64>| {
-            chunk_set.insert(ChunkLoadQueueItem {
-                pos: TLCPos(vgrid_chunk.0 + self.metadata().start_tlc.0.to_vec()),
-                data: (),
-            });
-
-            // let grid_chunk = self.grid_pos_for_virtual_grid_pos(
-            //     TLCVector(vgrid_chunk.0.to_vec().cast::<usize>().unwrap()),
-            //     vgrid_size
-            // );
-            // self.chunks[index_for_pos(grid_chunk.0, self.size)].invalidate();
-        };
-
-        for (a, b, c) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
-            if shift.0[a] != 0 {
-                for av in if shift.0[a] < 0 {
-                    0..load_in_from_edge.0[a]
-                } else {
-                    active_size as i32 - 1 - load_in_from_edge.0[a]..active_size as i32
-                } {
-                    for bv in 0..active_size {
-                        for cv in 0..active_size {
-                            queue_chunk(abc_pos(av, bv as i32, cv as i32, a, b, c));
-                        }
-                    }
-                }
-            }
-        }
-
-        for (a, b, c) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
-            if load_buffer[a] {
-                let av = if shift.0[a] > 0 {
-                    active_size as i32
-                } else {
-                    -1
-                };
-                for bv in 0..active_size {
-                    for cv in 0..active_size {
-                        queue_chunk(abc_pos(av, bv as i32, cv as i32, a, b, c));
-                    }
-                }
-            }
-            if load_buffer[a] && load_buffer[b] {
-                let av = if shift.0[a] > 0 {
-                    active_size as i64
-                } else {
-                    -1
-                };
-                let bv = if shift.0[b] > 0 {
-                    active_size as i64
-                } else {
-                    -1
-                };
-                for cv in 0..active_size as i64 {
-                    queue_chunk(abc_pos(av, bv, cv, a, b, c));
-                }
-            }
-        }
-
-        if load_buffer.iter().all(|x| *x) {
-            let chunk = Point3 {
-                x: if shift.0.x > 0 {
-                    active_size as i64
-                } else {
-                    -1
-                },
-                y: if shift.0.y > 0 {
-                    active_size as i64
-                } else {
-                    -1
-                },
-                z: if shift.0.z > 0 {
-                    active_size as i64
-                } else {
-                    -1
-                },
-            };
-            queue_chunk(TLCPos(chunk));
-        }
-
-        chunk_set.into_iter().collect()
+    fn load_buffer_chunks(
+        &self,
+        cfg: &super::LoadBufferChunks,
+    ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
+        cfg.collect_chunks_to_load(self.metadata().size, self.metadata().start_tlc, |pos| {
+            ChunkLoadQueueItem { pos, data: () }
+        })
     }
 
     fn size(&self) -> usize {
@@ -270,7 +194,11 @@ fn edit_grid_layer_with_size<
     let vgrid_positions: Vec<_> = (0..cubed(mem_grid.metadata().size))
         .map(|i| {
             mem_grid.virtual_grid_pos_for_grid_pos(
-                TLCVector(pos_for_index(i, mem_grid.metadata().size)),
+                TLCPos(
+                    pos_for_index(i, mem_grid.metadata().size)
+                        .cast::<u32>()
+                        .unwrap(),
+                ),
                 grid_size,
             )
         })

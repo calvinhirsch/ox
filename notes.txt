@@ -1,4 +1,5 @@
 TO-DO rust:
+ - Look into using Pin for making sure World doesn't move during chunk loading
  - Macros for
     - Deriving DataComponentWrapper
     - Deriving DataComponentSet if all struct members are DataComponentWrapper or DataComponent (?)

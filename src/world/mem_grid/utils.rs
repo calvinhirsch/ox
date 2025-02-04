@@ -1,5 +1,8 @@
-use cgmath::{Array, EuclideanSpace, Point3, Vector3};
+use cgmath::{Array, Point3, Vector3};
+use getset::CopyGetters;
 use std::ops::{DerefMut, Index, IndexMut, Mul};
+
+use crate::world::VoxelPos;
 
 pub fn squared<T: Copy + Mul<Output = T>>(x: T) -> T {
     x * x
@@ -8,55 +11,58 @@ pub fn cubed<T: Copy + Mul<Output = T>>(x: T) -> T {
     x * x * x
 }
 
-/// Standard indexing scheme to store a 3D structure in a 1D array
-pub const fn index_for_pos(pos: Vector3<usize>, size: usize) -> usize {
-    pos.x + pos.y * size * size + pos.z * size
+/// Standard indexing scheme to store a 3D cubic array in a 1D array. `size` is the length of the cube side.
+pub const fn index_for_pos(pos: Point3<u32>, size: usize) -> usize {
+    pos.x as usize + pos.y as usize * size as usize * size as usize + pos.z as usize * size as usize
 }
 
-pub fn amod(n: Vector3<i64>, d: usize) -> Vector3<usize> {
+pub fn amod(n: Point3<i64>, d: usize) -> Point3<usize> {
     (((n % d as i64) + Vector3::<i64>::from_value(d as i64)) % d as i64)
         .cast::<usize>()
         .unwrap()
 }
 
-pub const fn pos_for_index(index: usize, size: usize) -> Vector3<usize> {
-    Vector3 {
+pub const fn pos_for_index(index: usize, size: usize) -> Point3<usize> {
+    Point3 {
         x: index % size,
         y: index / (size * size),
         z: (index % (size * size)) / size,
     }
 }
 
-/// Get the index of a point at any level/LOD within a top level chunk.
-///
-/// pos_in_tlc: Position relative to bottom corner of current TLC in units of lvl and lod. For
-///             example, if lvl=0 and lod=2, pos_in_tlc should be in units 4x larger than highest
-///             fidelity voxels (i.e. 4 in world coords).
-pub fn index_for_pos_in_tlc(
-    pos_in_tlc: Point3<u32>,
-    chunk_size: usize,
-    n_chunk_lvls: usize,
-    chunk_lvl: usize,
-    lod: usize,
-) -> usize {
-    let mut idx = 0;
-    for lvl in (chunk_lvl + 1..n_chunk_lvls).rev() {
-        idx *= cubed(chunk_size);
-        let lvl_block_size = chunk_size.pow(lvl as u32);
-        let pos_at_lvl = (pos_in_tlc / lvl_block_size as u32) % chunk_size as u32;
-        idx += index_for_pos(pos_at_lvl.to_vec().cast::<usize>().unwrap(), chunk_size);
+#[derive(Debug, Clone)]
+/// Position relative to bottom corner of current TLC in units of this LOD. For example,
+/// if LOD  lvl=0 and sublvl=2, pos_in_tlc should be in units 4x larger than highest
+/// fidelity voxels (i.e. 4 in world coords).
+pub struct VoxelPosInLOD {
+    pub pos: Point3<u32>, // position in units of current LOD voxels
+    pub lvl: u8,
+    pub sublvl: u8,
+}
+impl VoxelPosInLOD {
+    pub fn in_full_lod(pos: VoxelPos<u32>) -> Self {
+        Self {
+            pos: pos.0,
+            lvl: 0,
+            sublvl: 0,
+        }
     }
 
-    let last_chunk_lvl_size = chunk_size / 2usize.pow(lod as u32);
-    idx += index_for_pos(
-        (pos_in_tlc % last_chunk_lvl_size as u32)
-            .to_vec()
-            .cast::<usize>()
-            .unwrap(),
-        last_chunk_lvl_size,
-    );
+    /// Index in top level chunk. This is not trivial to compute.
+    pub fn index(&self, chunk_size: ChunkSize, largest_chunk_lvl: u8) -> usize {
+        let mut idx = 0usize;
+        for lvl in (self.lvl + 1..=largest_chunk_lvl).rev() {
+            idx *= cubed(chunk_size.size()) as usize;
+            let lvl_block_size = chunk_size.size().pow(lvl as u32);
+            let pos_at_lvl = (self.pos / lvl_block_size as u32) % chunk_size.size() as u32;
+            idx += index_for_pos(pos_at_lvl, chunk_size.size());
+        }
 
-    idx
+        let last_chunk_lvl_size = chunk_size.size() / 2usize.pow(self.sublvl as u32);
+        idx += index_for_pos(self.pos % last_chunk_lvl_size as u32, last_chunk_lvl_size);
+
+        idx
+    }
 }
 
 pub struct IteratorWithIndexing<I, T>
@@ -101,5 +107,27 @@ where
             panic!("Tried to index same element as currently mutably borrowed.")
         }
         self.content.index(index)
+    }
+}
+
+#[derive(Debug, CopyGetters, Clone, Copy)]
+pub struct ChunkSize {
+    #[get_copy = "pub"]
+    exp: u8,
+}
+impl ChunkSize {
+    /// Chunk size will be 2^`exp`
+    pub const fn new(exp: u8) -> Self {
+        Self { exp }
+    }
+
+    /// Length in voxels per side. Total voxels in the chunk would be this cubed.
+    pub fn size(&self) -> usize {
+        1usize << self.exp()
+    }
+
+    /// Number of chunk sublevels that would exist given this chunk size
+    pub fn n_sublvls(&self) -> u8 {
+        self.exp() - 1
     }
 }

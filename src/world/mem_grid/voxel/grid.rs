@@ -5,10 +5,10 @@ use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::renderer::component::voxels::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::{ChunkLoadQueueItem, LayerChunkState};
-use crate::world::mem_grid::utils::{cubed, index_for_pos_in_tlc, IteratorWithIndexing};
+use crate::world::mem_grid::utils::{cubed, ChunkSize, IteratorWithIndexing, VoxelPosInLOD};
 use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxels;
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
-use crate::world::{TLCPos, TLCVector, VoxelPos};
+use crate::world::{TLCPos, VoxelPos};
 use cgmath::{Array, EuclideanSpace, Vector3};
 use getset::{CopyGetters, Getters};
 use hashbrown::{HashMap, HashSet};
@@ -23,10 +23,12 @@ pub struct VoxelMemoryGrid<const N: usize> {
     metadata: VoxelMemoryGridMetadata,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(CopyGetters, Clone, Copy, Debug)]
 pub struct LodId {
-    lvl: usize,
-    sublvl: usize,
+    #[get_copy = "pub"]
+    lvl: u8,
+    #[get_copy = "pub"]
+    sublvl: u8,
 }
 
 #[derive(Clone, Debug, CopyGetters)]
@@ -34,11 +36,7 @@ pub struct VoxelMemoryGridMetadata {
     #[get_copy = "pub"]
     largest_lod: LodId, // which (lvl, sublvl) has the largest grid size
     #[get_copy = "pub"]
-    chunk_size: usize,
-    #[get_copy = "pub"]
-    n_lvls: usize,
-    #[get_copy = "pub"]
-    n_sublvls: usize,
+    chunk_size: ChunkSize,
     #[get_copy = "pub"]
     lod_block_fill_thresh: f32,
 }
@@ -50,18 +48,19 @@ pub struct VoxelChunkLoadQueueItemData<const N: usize> {
 
 impl VoxelMemoryGridMetadata {
     pub fn tlc_size(&self) -> usize {
-        self.chunk_size.pow(self.largest_lod.lvl as u32)
+        self.chunk_size.size().pow(self.largest_lod.lvl as u32)
             * 2usize.pow(self.largest_lod.sublvl as u32)
     }
 }
 
-impl<const N: usize> VoxelMemoryGrid<N> {
-    /// Size of top level chunks in units of an LOD's voxels, where the LOD is specified by lvl and sublvl
-    fn lod_tlc_size(chunk_size: usize, n_lvls: usize, lvl: usize, sublvl: usize) -> usize {
-        chunk_size.pow((n_lvls - lvl) as u32).to_le() >> sublvl
-    }
+/// Size (on one side) of top level chunks in units of an LOD's voxels, where the LOD is specified by lvl and sublvl.
+/// This number can be cubed to get the number of voxels.
+pub fn lod_tlc_size(chunk_size: ChunkSize, largest_lvl: u8, lvl: u8, sublvl: u8) -> usize {
+    chunk_size.size().pow((largest_lvl - lvl) as u32) >> sublvl
+}
 
-    fn lod(&self, lvl: usize, sublvl: usize) -> Option<&VoxelMemoryGridLOD> {
+impl<const N: usize> VoxelMemoryGrid<N> {
+    fn lod(&self, lvl: u8, sublvl: u8) -> Option<&VoxelMemoryGridLOD> {
         self.lods
             .iter()
             .filter(|lod| {
@@ -73,7 +72,7 @@ impl<const N: usize> VoxelMemoryGrid<N> {
     pub fn new(
         lod_params: [VoxelLODCreateParams; N],
         memory_allocator: Arc<dyn MemoryAllocator>,
-        chunk_size: usize,
+        chunk_size: ChunkSize,
         start_tlc: TLCPos<i64>,
         lod_block_fill_thresh: f32,
     ) -> (Self, VoxelData<N>) {
@@ -95,11 +94,13 @@ impl<const N: usize> VoxelMemoryGrid<N> {
             .map(|lod| (lod.lvl, lod.sublvl, lod.render_area_size))
             .max()
             .unwrap();
-        let n_lvls = largest_lvl + 1;
-        let n_sublvls = (chunk_size.ilog2() + 1) as usize;
+        assert!(
+            largest_sublvl == 0,
+            "Largest lvl LOD (lowest fidelity) should have sublvl 0"
+        );
 
         let (grid_lods, lods) = unzip_array_of_tuple(lod_params.map(|params| {
-            let lod_tlc_size = Self::lod_tlc_size(chunk_size, n_lvls, params.lvl, params.sublvl);
+            let lod_tlc_size = lod_tlc_size(chunk_size, largest_lvl, params.lvl, params.sublvl);
             let start_tlc = TLCPos(
                 start_tlc.0 + Vector3::from_value(((size - params.render_area_size) / 2) as i64),
             );
@@ -119,14 +120,14 @@ impl<const N: usize> VoxelMemoryGrid<N> {
                     sublvl: largest_sublvl,
                 },
                 chunk_size,
-                n_lvls,
-                n_sublvls,
                 lod_block_fill_thresh,
             },
         };
 
         debug_assert!(
-            (0..n_lvls).map(|i| grid.lod(i, 0)).all(|x| x.is_some()),
+            (0..=largest_lvl)
+                .map(|i| grid.lod(i, 0))
+                .all(|x| x.is_some()),
             "Every tier should have an LOD at subtier 0"
         );
 
@@ -137,13 +138,36 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         self.lods.each_mut().map(|lod| lod.aggregate_updates(true))
     }
 
-    fn apply_and_queue<F: FnMut(&mut VoxelMemoryGridLOD) -> Vec<ChunkLoadQueueItem<()>>>(
+    fn apply_to_lods_and_queue_chunks_mut<
+        F: FnMut(&mut VoxelMemoryGridLOD) -> Vec<ChunkLoadQueueItem<()>>,
+    >(
         &mut self,
         mut to_apply: F,
     ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadQueueItemData<N>>> {
         let mut chunks = HashMap::new();
 
         for (i, lod) in self.lods.iter_mut().enumerate() {
+            for item in to_apply(lod) {
+                let e = chunks.entry(item.pos.0).or_insert(ChunkLoadQueueItem {
+                    pos: item.pos,
+                    data: VoxelChunkLoadQueueItemData { lods: [false; N] },
+                });
+                e.data.lods[i] = true;
+            }
+        }
+
+        chunks.into_values().collect()
+    }
+
+    fn apply_to_lods_and_queue_chunks<
+        F: FnMut(&VoxelMemoryGridLOD) -> Vec<ChunkLoadQueueItem<()>>,
+    >(
+        &self,
+        mut to_apply: F,
+    ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadQueueItemData<N>>> {
+        let mut chunks = HashMap::new();
+
+        for (i, lod) in self.lods.iter().enumerate() {
             for item in to_apply(lod) {
                 let e = chunks.entry(item.pos.0).or_insert(ChunkLoadQueueItem {
                     pos: item.pos,
@@ -169,21 +193,27 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
     type ChunkLoadQueueItemData = VoxelChunkLoadQueueItemData<N>;
 
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        self.apply_and_queue(|lod| lod.queue_load_all())
+        self.apply_to_lods_and_queue_chunks_mut(|lod| lod.queue_load_all())
     }
 
     fn shift(
         &mut self,
-        shift: TLCVector<i32>,
-        load_in_from_edge: TLCVector<i32>,
-        load_buffer: [bool; 3],
+        shift: &crate::world::mem_grid::MemGridShift,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        self.apply_and_queue(|lod| lod.shift(shift, load_in_from_edge, load_buffer))
+        self.apply_to_lods_and_queue_chunks_mut(|lod| lod.shift(shift))
+    }
+
+    fn load_buffer_chunks(
+        &self,
+        cfg: &crate::world::mem_grid::LoadBufferChunks,
+    ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
+        self.apply_to_lods_and_queue_chunks(|lod| lod.load_buffer_chunks(cfg))
     }
 
     fn size(&self) -> usize {
         self.largest_lod().size()
     }
+
     fn start_tlc(&self) -> TLCPos<i64> {
         self.largest_lod().start_tlc()
     }
@@ -230,10 +260,18 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
         let mut r = Ok(());
         for lod_o in self.lods.iter_mut() {
             if let Some(lod) = lod_o {
-                r = r.or(lod.data_mut().set_invalid());
+                r = r.and(lod.data_mut().set_invalid());
             }
         }
         r
+    }
+
+    pub unsafe fn mark_all_lods_missing(&mut self) {
+        for lod_o in self.lods.iter_mut() {
+            if let Some(lod) = lod_o {
+                unsafe { (&mut **lod.data_mut()).set_missing() }
+            }
+        }
     }
 
     pub fn set_voxel(
@@ -250,7 +288,7 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
                 .map(|d| d.with_voxel_ids_mut())
                 .flatten()
             {
-                let block_size = meta.chunk_size.pow(lvl as u32) * 2usize.pow(sublvl as u32);
+                let block_size = meta.chunk_size.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
                 data.set_voxel(index_in_tlc / cubed(block_size), voxel_typ);
             }
         }
@@ -263,7 +301,7 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
         meta: &VoxelMemoryGridMetadata,
     ) {
         self.set_voxel(
-            index_for_pos_in_tlc(pos.0, meta.chunk_size, meta.n_lvls, 0, 0),
+            VoxelPosInLOD::in_full_lod(pos).index(meta.chunk_size, meta.largest_lod.lvl),
             voxel_typ,
             meta,
         );
@@ -301,15 +339,14 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
     /// Unsafe because it will access the chunk's data when it is in "missing" state.
     /// Presumably, this function is being called in a chunk loading thread having borrowed
     /// the chunk data.
-    pub unsafe fn load_new<F: Fn(TLCPos<i64>, usize, usize, &mut ChunkVoxels, usize, usize)>(
+    pub unsafe fn load_new<F: Fn(TLCPos<i64>, u8, u8, &mut ChunkVoxels, usize, u8)>(
         &mut self,
         pos: TLCPos<i64>,
         lods_to_load: [bool; N],
         gen_func: F,
-        chunk_size: usize,
+        chunk_size: ChunkSize,
         tlc_size: usize,
-        n_chunk_lvls: usize,
-        n_lods: usize,
+        largest_chunk_lvl: u8,
         lod_block_fill_thresh: f32,
     ) {
         // Last lvl/sublvl that contained voxel ID info
@@ -323,19 +360,19 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
             let load = lods_to_load[i];
 
             if let Some(lod_data) = lod {
-                let lvl = lod_data.lvl() as usize;
-                let sublvl = lod_data.sublvl() as usize;
+                let lvl = lod_data.lvl();
+                let sublvl = lod_data.sublvl();
                 if load {
                     debug_assert!(
                         matches!(
                             unsafe { &**lod_data.data() }.state(),
-                            LayerChunkState::Invalid
+                            LayerChunkState::Missing
                         ),
                         "Trying to load into already loaded chunk {:?} ({}, {})",
                         pos,
                         lod_data.lvl(),
                         lod_data.sublvl(),
-                    ); // Should have been marked invalid before loading
+                    ); // Should have been marked missing before loading
 
                     let data = unsafe { (&mut **lod_data.data_mut()).get_mut_for_loading() };
 
@@ -357,8 +394,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                                 l_lvl,
                                 l_sublvl,
                                 chunk_size,
-                                n_chunk_lvls,
-                                n_lods,
+                                largest_chunk_lvl,
                                 lod_block_fill_thresh,
                             );
                         } else {
@@ -369,7 +405,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                                 sublvl,
                                 data.overwrite::<VE>().voxel_ids,
                                 tlc_size,
-                                n_chunk_lvls,
+                                largest_chunk_lvl,
                             );
                         }
 
@@ -391,8 +427,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                             last_bitmask_lvl.unwrap(),
                             last_bitmask_sublvl.unwrap(),
                             chunk_size,
-                            n_chunk_lvls,
-                            n_lods,
+                            largest_chunk_lvl,
                             lod_block_fill_thresh,
                         )
                     }
@@ -416,14 +451,14 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct GlobalVoxelPos {
     pub tlc: TLCPos<i64>,
     pub voxel_index: usize,
 }
 impl GlobalVoxelPos {
-    pub fn new(global_pos: VoxelPos<i64>, chunk_size: usize, n_chunk_lvls: usize) -> Self {
-        let tlc_size = chunk_size.pow(n_chunk_lvls as u32);
+    pub fn new(global_pos: VoxelPos<i64>, chunk_size: ChunkSize, largest_chunk_lvl: u8) -> Self {
+        let tlc_size = chunk_size.size().pow(largest_chunk_lvl as u32);
         let global_tlc = global_pos.0 / tlc_size as i64;
         let pos_in_tlc = (global_pos.0 - (global_tlc * tlc_size as i64).to_vec())
             .cast::<u32>()
@@ -431,7 +466,8 @@ impl GlobalVoxelPos {
 
         GlobalVoxelPos {
             tlc: TLCPos(global_tlc),
-            voxel_index: index_for_pos_in_tlc(pos_in_tlc, chunk_size, n_chunk_lvls, 0, 0),
+            voxel_index: VoxelPosInLOD::in_full_lod(VoxelPos(pos_in_tlc))
+                .index(chunk_size, largest_chunk_lvl),
         }
     }
 }
