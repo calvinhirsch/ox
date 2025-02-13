@@ -4,7 +4,9 @@ use super::lod::{
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::renderer::component::voxels::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
-use crate::world::loader::{ChunkLoadQueueItem, LayerChunkState};
+use crate::world::loader::{
+    BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunkState,
+};
 use crate::world::mem_grid::utils::{cubed, ChunkSize, IteratorWithIndexing, VoxelPosInLOD};
 use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxels;
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
@@ -41,7 +43,7 @@ pub struct VoxelMemoryGridMetadata {
     lod_block_fill_thresh: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VoxelChunkLoadQueueItemData<const N: usize> {
     pub lods: [bool; N],
 }
@@ -56,7 +58,7 @@ impl VoxelMemoryGridMetadata {
 /// Size (on one side) of top level chunks in units of an LOD's voxels, where the LOD is specified by lvl and sublvl.
 /// This number can be cubed to get the number of voxels.
 pub fn lod_tlc_size(chunk_size: ChunkSize, largest_lvl: u8, lvl: u8, sublvl: u8) -> usize {
-    chunk_size.size().pow((largest_lvl - lvl) as u32) >> sublvl
+    1usize << (chunk_size.exp() * (largest_lvl - lvl) - sublvl)
 }
 
 impl<const N: usize> VoxelMemoryGrid<N> {
@@ -135,7 +137,12 @@ impl<const N: usize> VoxelMemoryGrid<N> {
     }
 
     pub fn get_updates(&mut self) -> [Vec<VoxelLODUpdate>; N] {
-        self.lods.each_mut().map(|lod| lod.aggregate_updates(true))
+        let mut i = 0;
+        self.lods.each_mut().map(|lod| {
+            // dbg!(i);
+            i += 1;
+            lod.aggregate_updates(true)
+        })
     }
 
     fn apply_to_lods_and_queue_chunks_mut<
@@ -219,14 +226,26 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
     }
 }
 
+#[derive(Debug)]
+pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum, const N: usize> {
+    // TODO: pub IS TEMP
+    pub lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+}
+
+pub enum SetVoxelErr {
+    LODDoesNotExist,
+    LODNotLoaded,
+    LODVoxelsNotLoaded,
+}
+
 impl<'a, const N: usize, VE: VoxelTypeEnum>
-    MemoryGridEditorChunk<'a, VoxelMemoryGrid<N>, &'a mut VoxelMemoryGridMetadata>
+    MemoryGridEditorChunk<'a, VoxelMemoryGrid<N>, VoxelMemoryGridMetadata>
     for ChunkVoxelEditor<'a, VE, N>
 {
     fn edit_grid_with_size(
         mem_grid: &'a mut VoxelMemoryGrid<N>,
         grid_size: usize,
-    ) -> MemoryGridEditor<ChunkVoxelEditor<'a, VE, N>, &'a mut VoxelMemoryGridMetadata> {
+    ) -> MemoryGridEditor<ChunkVoxelEditor<'a, VE, N>, VoxelMemoryGridMetadata> {
         let start_tlc = mem_grid.start_tlc();
         let VoxelMemoryGrid { lods, metadata } = mem_grid;
         MemoryGridEditor {
@@ -239,20 +258,24 @@ impl<'a, const N: usize, VE: VoxelTypeEnum>
             .collect(),
             size: grid_size,
             start_tlc,
-            metadata,
+            metadata: metadata.clone(),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum, const N: usize> {
-    lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
-}
+unsafe impl<'a, const N: usize, VE: VoxelTypeEnum>
+    BorrowChunkForLoading<BorrowedChunkVoxelEditor<VE, N>> for ChunkVoxelEditor<'a, VE, N>
+{
+    fn take_data_for_loading(&mut self) -> BorrowedChunkVoxelEditor<VE, N> {
+        unsafe {
+            self.mark_all_lods_missing();
+        }
+        BorrowedChunkVoxelEditor::new(self)
+    }
 
-pub enum SetVoxelErr {
-    LODDoesNotExist,
-    LODNotLoaded,
-    LODVoxelsNotLoaded,
+    fn mark_invalid(&mut self) -> Result<(), ()> {
+        unsafe { self.mark_all_lods_invalid() }
+    }
 }
 
 impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
@@ -267,6 +290,9 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
     }
 
     pub unsafe fn mark_all_lods_missing(&mut self) {
+        if self.lods[0].is_some() {
+            println!("Taking chunk that has lvl 0 sublvl 0 LOD");
+        }
         for lod_o in self.lods.iter_mut() {
             if let Some(lod) = lod_o {
                 unsafe { (&mut **lod.data_mut()).set_missing() }
@@ -317,11 +343,30 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
         }
         true
     }
+
+    pub fn all_lods_valid(&self) -> bool {
+        self.lods.iter().all(|l| {
+            l.as_ref()
+                .map(|l| matches!(l.data().state(), LayerChunkState::Valid))
+                .unwrap_or(true)
+        })
+    }
 }
 
 #[derive(Debug)]
 pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
-    lods: [Option<BorrowedVoxelLODChunkEditor<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+    // TODO: pub IS TEMP
+    pub lods: [Option<BorrowedVoxelLODChunkEditor<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+}
+
+unsafe impl<VE: VoxelTypeEnum, const N: usize> Send for BorrowedChunkVoxelEditor<VE, N> {}
+
+unsafe impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunk for BorrowedChunkVoxelEditor<VE, N> {
+    unsafe fn mark_valid(&mut self) {
+        unsafe {
+            self.set_all_lods_valid();
+        }
+    }
 }
 
 impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
@@ -468,6 +513,141 @@ impl GlobalVoxelPos {
             tlc: TLCPos(global_tlc),
             voxel_index: VoxelPosInLOD::in_full_lod(VoxelPos(pos_in_tlc))
                 .index(chunk_size, largest_chunk_lvl),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::{Point3, Vector3};
+    use enum_iterator::Sequence;
+    use num_derive::{FromPrimitive, ToPrimitive};
+    use vulkano::command_buffer::BufferCopy;
+
+    use crate::{
+        renderer::test_context::TestContext,
+        voxel_type::{Material, VoxelTypeDefinition},
+    };
+
+    const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
+
+    #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive)]
+    pub enum Block {
+        AIR,
+        SOLID,
+    }
+
+    impl VoxelTypeEnum for Block {
+        type VoxelAttributes = ();
+
+        fn def(&self) -> VoxelTypeDefinition<Self::VoxelAttributes> {
+            use Block::*;
+            match *self {
+                AIR => VoxelTypeDefinition {
+                    material: Material::default(),
+                    is_visible: false,
+                    attributes: (),
+                },
+                SOLID => VoxelTypeDefinition {
+                    material: Material {
+                        color: [1., 0., 0.],
+                        emission_color: [1., 0., 0.],
+                        emission_strength: 1.2,
+                        ..Default::default()
+                    },
+                    is_visible: true,
+                    attributes: (),
+                },
+            }
+        }
+
+        fn empty() -> u8 {
+            0
+        }
+    }
+
+    #[test]
+    fn test_edit_voxel_grid() {
+        let renderer_context = TestContext::new();
+        let start_tlc = TLCPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+        let (mut grid, _) = VoxelMemoryGrid::new(
+            [
+                VoxelLODCreateParams {
+                    voxel_resolution: 1,
+                    lvl: 0,
+                    sublvl: 0,
+                    render_area_size: 1,
+                    bitmask_binding: 8,
+                    voxel_ids_binding: Some(4),
+                },
+                VoxelLODCreateParams {
+                    voxel_resolution: 2,
+                    lvl: 0,
+                    sublvl: 1,
+                    render_area_size: 3,
+                    bitmask_binding: 9,
+                    voxel_ids_binding: Some(5),
+                },
+                VoxelLODCreateParams {
+                    voxel_resolution: 4,
+                    lvl: 0,
+                    sublvl: 2,
+                    render_area_size: 7,
+                    bitmask_binding: 10,
+                    voxel_ids_binding: Some(6),
+                },
+                VoxelLODCreateParams {
+                    voxel_resolution: 8,
+                    lvl: 1,
+                    sublvl: 0,
+                    render_area_size: 15,
+                    bitmask_binding: 11,
+                    voxel_ids_binding: Some(7),
+                },
+                VoxelLODCreateParams {
+                    voxel_resolution: 64,
+                    lvl: 2,
+                    sublvl: 0,
+                    render_area_size: 15,
+                    bitmask_binding: 12,
+                    voxel_ids_binding: None,
+                },
+            ],
+            Arc::clone(&renderer_context.memory_allocator) as Arc<dyn MemoryAllocator>,
+            CHUNK_SIZE,
+            start_tlc,
+            0.26,
+        );
+
+        {
+            let mut editor = ChunkVoxelEditor::<Block, 5>::edit_grid(&mut grid);
+            unsafe {
+                editor.chunks[1640].lods[1]
+                    .as_mut()
+                    .unwrap()
+                    .data_mut()
+                    .set_missing();
+                editor.chunks[1640].lods[1]
+                    .as_mut()
+                    .unwrap()
+                    .data_mut()
+                    .get_mut_for_loading()
+                    .updated_bitmask_regions
+                    .regions = vec![BufferCopy {
+                    src_offset: 2222,
+                    dst_offset: 2222,
+                    size: 2222,
+                    ..Default::default()
+                }];
+            }
+            unsafe {
+                editor.chunks[1640].lods[1]
+                    .as_mut()
+                    .unwrap()
+                    .data_mut()
+                    .set_valid();
+            }
         }
     }
 }

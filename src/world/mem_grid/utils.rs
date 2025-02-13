@@ -50,15 +50,19 @@ impl VoxelPosInLOD {
 
     /// Index in top level chunk. This is not trivial to compute.
     pub fn index(&self, chunk_size: ChunkSize, largest_chunk_lvl: u8) -> usize {
+        // ENHANCEMENT: make largest_chunk_lvl const to allow loop unrolling here
         let mut idx = 0usize;
-        for lvl in (self.lvl + 1..=largest_chunk_lvl).rev() {
+        for lvl in (self.lvl + 1..largest_chunk_lvl).rev() {
             idx *= cubed(chunk_size.size()) as usize;
-            let lvl_block_size = chunk_size.size().pow(lvl as u32);
+            // block size for this level in units of self.lvl, self.sublvl
+            let lvl_block_size = 1u32 << (chunk_size.exp() * (lvl - self.lvl) - self.sublvl);
             let pos_at_lvl = (self.pos / lvl_block_size as u32) % chunk_size.size() as u32;
             idx += index_for_pos(pos_at_lvl, chunk_size.size());
         }
 
-        let last_chunk_lvl_size = chunk_size.size() / 2usize.pow(self.sublvl as u32);
+        // e.g., last_chunk_lvl_size = 4 if sublvl == 1 (voxels of size 2x2x2) and chunk size == 8
+        let last_chunk_lvl_size = 1usize << (chunk_size.exp() - self.sublvl);
+        idx *= cubed(last_chunk_lvl_size);
         idx += index_for_pos(self.pos % last_chunk_lvl_size as u32, last_chunk_lvl_size);
 
         idx

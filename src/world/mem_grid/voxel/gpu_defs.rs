@@ -10,12 +10,20 @@ pub struct ChunkVoxels {
 impl Index<usize> for ChunkVoxels {
     type Output = u8;
     fn index(&self, i: usize) -> &u8 {
-        &self.ids[i * 8 / 128].indices[i % 8 / 128]
+        &self.ids[i * VoxelTypeIDs::BITS_PER_VOXEL / 128].indices
+            [i % VoxelTypeIDs::BITS_PER_VOXEL / 128]
     }
 }
 impl IndexMut<usize> for ChunkVoxels {
     fn index_mut(&mut self, i: usize) -> &mut u8 {
-        &mut self.ids[i * 8 / 128].indices[i % 8 / 128]
+        debug_assert!(
+            i < self.n_voxels(),
+            "Tried to index ChunkVoxels with {} (total: {})",
+            i,
+            self.n_voxels()
+        );
+        &mut self.ids[i * VoxelTypeIDs::BITS_PER_VOXEL / 128].indices
+            [i % (128 / VoxelTypeIDs::BITS_PER_VOXEL)]
     }
 }
 impl ChunkVoxels {
@@ -44,7 +52,7 @@ impl ChunkBitmask {
     }
 
     pub fn n_voxels(&self) -> usize {
-        self.bitmask.len() * 128 / VoxelBitmask::BITS_PER_VOXEL
+        self.bitmask.len() * 128
     }
 
     pub fn get(&self, index: usize) -> bool {

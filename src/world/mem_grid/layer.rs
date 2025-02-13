@@ -187,7 +187,7 @@ fn edit_grid_layer_with_size<
     grid_size: usize,
     edit_chunk_f: F,
 ) -> MemoryGridEditor<Option<CE>, &'a MemoryGridLayerMetadata<MD>> {
-    let mut vgrid: Vec<Option<CE>> = (0..grid_size.pow(3)).map(|_| None).collect();
+    let mut vgrid: Vec<Option<CE>> = (0..cubed(grid_size)).map(|_| None).collect();
 
     // If this layer is smaller than full grid, add padding to virtual position so it
     // is centered
@@ -244,5 +244,44 @@ impl<
         grid_size: usize,
     ) -> MemoryGridEditor<Option<CE>, &'a MemoryGridLayerMetadata<MD>> {
         edit_grid_layer_with_size(mem_grid, grid_size, CE::edit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edit_grid_layer_for_size() {
+        let size = 4;
+        let start_tlc = TLCPos(Point3 { x: 0, y: 0, z: 0 });
+        let initial_chunks = (0..cubed(size)).map(|_| LayerChunk::new_valid(0)).collect();
+        let mut layer = MemoryGridLayer::new(initial_chunks, start_tlc, size, ());
+        {
+            let mut editor = edit_grid_layer_with_size(&mut layer, 16, |c, _| c);
+            for (i, chunk) in editor.chunks.iter_mut().enumerate() {
+                chunk.as_mut().map(|c| {
+                    c.get_mut().map(|c| {
+                        *c = i;
+                    })
+                });
+            }
+        }
+        for y in 0..4 {
+            for z in 0..4 {
+                for x in 0..4 {
+                    assert_eq!(
+                        *layer.chunks[x + y * 16 + z * 4].get().unwrap(),
+                        x + 6 + (y + 6) * 256 + (z + 6) * 16
+                    );
+                }
+            }
+        }
+
+        {
+            let mut editor = edit_grid_layer_with_size(&mut layer, 16, |c, _| c);
+            *editor.chunks[1640].as_mut().unwrap().get_mut().unwrap() = 99999;
+        }
+        assert!(*layer.chunks[2].get().unwrap() == 99999)
     }
 }

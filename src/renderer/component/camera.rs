@@ -1,40 +1,26 @@
-use crate::renderer::component::{DataComponent, DataComponentWrapper};
+use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithFullCopy};
+use crate::renderer::component::DataComponent;
 use crate::world::camera::Camera;
+use crate::world::VoxelPos;
 use cgmath::{Angle, Array, Point3, Rad, Vector3};
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::dual::{DualBuffer, DualBufferWithFullCopy};
-use crate::world::VoxelPos;
 
-pub struct RendererCamera {
-    comp: DataComponent<DualBufferWithFullCopy<CameraUBO>>,
-}
+pub type RendererCamera = DataComponent<DualBufferWithFullCopy<CameraUBO>>;
 impl RendererCamera {
     pub fn new(binding: u32, allocator: Arc<dyn MemoryAllocator>) -> Self {
-        RendererCamera {
-            comp: DataComponent {
-                buffer_scheme: DualBuffer::from_data(
-                    CameraUBO::new_blank(),
-                    allocator,
-                    true
-                ).with_full_copy(),
-                binding,
-            },
+        DataComponent {
+            buffer_scheme: DualBuffer::from_data(CameraUBO::new_blank(), allocator, true)
+                .with_full_copy(),
+            binding,
         }
     }
 
     pub fn update_staging_buffer(&mut self, camera: &Camera) {
-        let mut w = self.comp.buffer_scheme.write_staging();
+        let mut w = self.buffer_scheme.write_staging();
         w.update(camera, VoxelPos(Point3::<f32>::from_value(0.)));
     }
-}
-impl DataComponentWrapper for RendererCamera {
-    type B = DualBufferWithFullCopy<CameraUBO>;
-
-    fn comp(&self) -> &DataComponent<Self::B> { &self.comp }
-
-    fn comp_mut(&mut self) -> &mut DataComponent<Self::B> { &mut self.comp }
 }
 
 /// Uniform buffer object containing camera info that gets passed to the GPU

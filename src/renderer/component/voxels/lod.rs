@@ -10,17 +10,20 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy};
 use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::memory::allocator::MemoryAllocator;
 
+#[derive(Debug, Clone)]
 pub struct VoxelIDUpdate<'a> {
     pub ids: &'a [VoxelTypeIDs],
     pub updated_regions: Vec<BufferCopy>,
 }
 
+#[derive(Debug, Clone)]
 pub struct VoxelLODUpdate<'a> {
     pub bitmask: &'a [VoxelBitmask],
     pub bitmask_updated_regions: Vec<BufferCopy>,
     pub id_update: Option<VoxelIDUpdate<'a>>,
 }
 
+#[derive(Debug)]
 pub struct RendererVoxelLOD {
     pub bitmask_buffers: DataComponent<DualBufferWithDynamicCopyRegions<VoxelBitmask>>,
     pub id_buffers: Option<DataComponent<DualBufferWithDynamicCopyRegions<VoxelTypeIDs>>>,
@@ -55,10 +58,10 @@ impl RendererVoxelLOD {
         }
     }
 
-    pub fn update_staging_buffers(&mut self, update: VoxelLODUpdate) {
+    pub fn update_staging_buffers_and_prep_copy(&mut self, update: VoxelLODUpdate) {
         self.bitmask_buffers
             .buffer_scheme
-            .update_staging_buffer(update.bitmask, update.bitmask_updated_regions);
+            .update_staging_buffer_and_prep_copy(update.bitmask, update.bitmask_updated_regions);
         match &mut self.id_buffers {
             None => {}
             Some(vids) => {
@@ -66,7 +69,7 @@ impl RendererVoxelLOD {
                     .id_update
                     .expect("Renderer did not receive ID update for LOD that has voxel IDs.");
                 vids.buffer_scheme
-                    .update_staging_buffer(id_update.ids, id_update.updated_regions);
+                    .update_staging_buffer_and_prep_copy(id_update.ids, id_update.updated_regions);
             }
         };
     }

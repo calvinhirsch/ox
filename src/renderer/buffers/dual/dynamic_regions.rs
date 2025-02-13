@@ -10,9 +10,9 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferIn
 use vulkano::descriptor_set::WriteDescriptorSet;
 
 /// Dual buffer scheme where different regions are copied each frame
-#[derive(new)]
+#[derive(new, Debug)]
 pub struct DualBufferWithDynamicCopyRegions<T: BufferContents> {
-    staging: Subbuffer<[T]>,
+    pub staging: Subbuffer<[T]>, // TODO: PUB IS TEMP, REMOVE IT
     device_local: Subbuffer<[T]>,
     copy_regions: Vec<BufferCopy>,
 }
@@ -29,6 +29,7 @@ impl<T: BufferContents> BufferScheme for DualBufferWithDynamicCopyRegions<T> {
         &self,
         _: &mut AutoCommandBufferBuilder<L, A>,
     ) {
+        // do no repeated transfer--only jit
     }
 
     fn record_transfer_jit<L, A: CommandBufferAllocator>(
@@ -45,18 +46,32 @@ impl<T: BufferContents> BufferScheme for DualBufferWithDynamicCopyRegions<T> {
     }
 }
 
-impl<T: BufferContents + Copy> DualBufferWithDynamicCopyRegions<T> {
-    pub fn update_staging_buffer(
+impl<T: BufferContents + Copy + std::fmt::Debug> DualBufferWithDynamicCopyRegions<T> {
+    /// Update staging buffers from `src` based on `regions` and add `regions` to `self.copy_regions`
+    /// so that those regions are later transferred to the GPU.
+    pub fn update_staging_buffer_and_prep_copy(
         &mut self,
         src: &[T],
         regions: impl IntoIterator<Item = BufferCopy>,
     ) {
+        // Regions here are in bytes, so we need to rescale them to be indices
         let mut bitmask_write = self.staging.write().unwrap();
-        let rate = 1 / size_of::<T>();
         for region in regions {
-            let start = region.src_offset as usize * rate;
-            let range = start..max(start + 1, start + (region.size as usize) * rate);
-            bitmask_write[range.clone()].copy_from_slice(&src[range]);
+            let src_offset = region.src_offset as usize / size_of::<T>();
+            let dst_offset = region.dst_offset as usize / size_of::<T>();
+            let size = max(1, (region.size as usize) / size_of::<T>());
+            dbg!(src_offset, dst_offset, size);
+            bitmask_write[dst_offset..dst_offset + size]
+                .copy_from_slice(&src[src_offset..src_offset + size]);
+            // dbg!((region.src_offset, region.dst_offset, region.size));
+            // self.copy_regions.push(BufferCopy {
+            //     src_offset: src_offset as u64,
+            //     dst_offset: dst_offset as u64,
+            //     size: region.size,
+            //     ..Default::default()
+            // });
+            println!();
+            self.copy_regions.push(region);
         }
     }
 }

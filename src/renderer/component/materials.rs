@@ -1,11 +1,10 @@
+use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
+use crate::renderer::component::DataComponent;
 use std::sync::Arc;
 use vulkano::buffer::BufferContents;
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::memory::allocator::MemoryAllocator;
-use crate::renderer::buffers::dual::{ConstantDeviceLocalBuffer, DualBuffer};
-use crate::renderer::component::{DataComponent, DataComponentWrapper};
-
 
 #[derive(BufferContents, Debug, Clone, Copy)]
 #[repr(C)]
@@ -37,11 +36,7 @@ impl Default for Material {
     }
 }
 
-
-pub struct MaterialList {
-    comp: DataComponent<ConstantDeviceLocalBuffer<[Material]>>
-}
-
+pub type MaterialList = DataComponent<ConstantDeviceLocalBuffer<[Material]>>;
 
 impl MaterialList {
     pub fn new<L, A: CommandBufferAllocator>(
@@ -50,20 +45,14 @@ impl MaterialList {
         binding: u32,
         one_time_transfer_builder: &mut AutoCommandBufferBuilder<L, A>,
     ) -> MaterialList {
-        MaterialList {
-            comp: DataComponent {
-                buffer_scheme: DualBuffer::from_iter(materials.iter().copied(), memory_allocator, false)
-                    .without_staging_buffer(one_time_transfer_builder),
-                binding,
-            }
+        DataComponent {
+            buffer_scheme: DualBuffer::from_iter(
+                materials.iter().copied(),
+                memory_allocator,
+                false,
+            )
+            .without_staging_buffer(one_time_transfer_builder),
+            binding,
         }
     }
-}
-
-impl DataComponentWrapper for MaterialList {
-    type B = ConstantDeviceLocalBuffer<[Material]>;
-
-    fn comp(&self) -> &DataComponent<Self::B> { &self.comp }
-
-    fn comp_mut(&mut self) -> &mut DataComponent<Self::B> { &mut self.comp }
 }

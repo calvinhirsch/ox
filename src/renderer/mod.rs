@@ -3,27 +3,28 @@ use std::time::Duration;
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::descriptor_set::allocator::DescriptorSetAllocator;
 use winit::dpi::PhysicalSize;
-use winit::window::{Window};
+use winit::window::Window;
 
 pub mod buffers;
 pub mod component;
 pub mod context;
 mod pipeline;
 pub mod swapchain;
+pub mod test_context;
 mod transfer;
 pub mod utils;
 
 use crate::renderer::component::DataComponentSet;
 use crate::renderer::swapchain::SwapchainPipelineParams;
+use crate::renderer::transfer::TransferManager;
 use context::Context;
 use swapchain::SwapchainPipeline;
-use crate::renderer::transfer::TransferManager;
 
 pub struct Renderer<
     D: DataComponentSet,
     DSA: DescriptorSetAllocator + 'static,
     CBA: CommandBufferAllocator + 'static,
-    DCBA: CommandBufferAllocator + 'static
+    DCBA: CommandBufferAllocator + 'static,
 > {
     component_set: D,
     context: Context,
@@ -35,8 +36,12 @@ pub struct RendererComponentEditor<'a, D> {
     pub component_set: &'a mut D,
 }
 
-impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocator + 'static, DCBA: CommandBufferAllocator + 'static>
-    Renderer<D, DSA, CBA, DCBA>
+impl<
+        D: DataComponentSet,
+        DSA: DescriptorSetAllocator,
+        CBA: CommandBufferAllocator + 'static,
+        DCBA: CommandBufferAllocator + 'static,
+    > Renderer<D, DSA, CBA, DCBA>
 {
     pub fn new(
         context: Context,
@@ -70,14 +75,9 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
         }
     }
 
-    pub fn window_resized(
-        &mut self,
-        new_dimensions: PhysicalSize<u32>,
-    ) {
-        self.swapchain_pipeline.resize(
-            &new_dimensions,
-            &self.component_set,
-        );
+    pub fn window_resized(&mut self, new_dimensions: PhysicalSize<u32>) {
+        self.swapchain_pipeline
+            .resize(&new_dimensions, &self.component_set);
     }
 
     pub fn recreate_swapchain(&mut self) {
@@ -85,12 +85,16 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
     }
 
     pub fn start_updating_staging_buffers(&mut self) -> RendererComponentEditor<D> {
-        self.transfer_manager.wait_for_staging_buffers(Some(Duration::from_secs(3)));
-        RendererComponentEditor { component_set: &mut self.component_set }
+        self.transfer_manager
+            .wait_for_staging_buffers(Some(Duration::from_secs(3)));
+        RendererComponentEditor {
+            component_set: &mut self.component_set,
+        }
     }
 
     pub fn draw_frame(&mut self) {
-        self.swapchain_pipeline.wait_for_compute_done(Some(Duration::from_secs(3)));
+        self.swapchain_pipeline
+            .wait_for_compute_done(Some(Duration::from_secs(3)));
 
         let transfer_fence = self.transfer_manager.start_transfer(
             Arc::clone(&self.context.device),
@@ -98,6 +102,7 @@ impl<D: DataComponentSet, DSA: DescriptorSetAllocator, CBA: CommandBufferAllocat
             &mut self.component_set,
         );
 
-        self.swapchain_pipeline.present(Arc::clone(&self.context.device), transfer_fence);
+        self.swapchain_pipeline
+            .present(Arc::clone(&self.context.device), transfer_fence);
     }
 }

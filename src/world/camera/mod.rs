@@ -1,7 +1,5 @@
 use crate::world::VoxelPos;
-use cgmath::{EuclideanSpace, Point3, Rad};
-
-use super::TLCPos;
+use cgmath::{Point3, Rad};
 
 pub mod controller;
 
