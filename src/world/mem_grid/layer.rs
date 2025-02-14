@@ -9,8 +9,11 @@ use super::{ChunkEditor, MemGridShift};
 
 #[derive(Clone, Debug, Getters)]
 pub struct MemoryGridLayerMetadata<MD> {
+    #[getset(get = "pub")]
     start_tlc: TLCPos<i64>,
-    size: usize,
+    #[getset(get = "pub")]
+    size: usize, // grid size (or render area size + 1)
+    #[getset(get = "pub")]
     offsets: TLCVector<usize>,
     #[getset(get = "pub")]
     extra: MD,
@@ -34,6 +37,7 @@ impl<C, MD> MemoryGridLayer<C, MD> {
         size: usize,
         extra_metadata: MD,
     ) -> Self {
+        debug_assert!(chunks.len() == cubed(size));
         MemoryGridLayer {
             chunks,
             metadata: MemoryGridLayerMetadata {
@@ -48,6 +52,7 @@ impl<C, MD> MemoryGridLayer<C, MD> {
     pub fn calc_offsets(start_tlc: TLCPos<i64>, size: usize) -> Vector3<usize> {
         amod(start_tlc.0, size).to_vec()
     }
+
     pub fn grid_pos_for_virtual_grid_pos(
         &self,
         tlc_pos: TLCVector<usize>,
@@ -283,5 +288,26 @@ mod tests {
             *editor.chunks[1640].as_mut().unwrap().get_mut().unwrap() = 99999;
         }
         assert!(*layer.chunks[2].get().unwrap() == 99999)
+    }
+
+    #[test]
+    fn test_edit_grid_layer() {
+        let size = 16;
+        let start_tlc = TLCPos(Point3 { x: 0, y: 0, z: 0 });
+        let initial_chunks = (0..cubed(size)).map(|_| LayerChunk::new_valid(0)).collect();
+        let mut layer = MemoryGridLayer::new(initial_chunks, start_tlc, size, ());
+        {
+            let mut editor = edit_grid_layer_with_size(&mut layer, size, |c, _| c);
+            for (i, chunk) in editor.chunks.iter_mut().enumerate() {
+                chunk.as_mut().map(|c| {
+                    c.get_mut().map(|c| {
+                        *c = i;
+                    })
+                });
+            }
+        }
+        for i in 0..cubed(size) {
+            assert_eq!(*layer.chunks[i].get().unwrap(), i);
+        }
     }
 }

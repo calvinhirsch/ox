@@ -16,7 +16,7 @@ pub mod voxel;
 #[derive(new, Clone, Getters)]
 pub struct MemoryGridEditor<CE, MD> {
     pub chunks: Vec<CE>,
-    pub size: usize,
+    pub size: usize, // grid size (or render area size + 1)
     pub start_tlc: TLCPos<i64>,
     #[get = "pub"]
     metadata: MD,
@@ -26,7 +26,7 @@ impl<CE, MD> MemoryGridEditor<CE, MD> {
     pub fn chunk_index_in(
         global_tlc_pos: TLCPos<i64>,
         grid_start_tlc: TLCPos<i64>,
-        grid_size: usize,
+        grid_size: usize, // (or render area size + 1)
     ) -> Option<usize> {
         Some(index_for_pos(
             (global_tlc_pos.0 - grid_start_tlc.0.to_vec()).cast::<u32>()?,
@@ -315,6 +315,7 @@ pub trait MemoryGridEditorChunk<'a, MG: MemoryGrid, MD>: Sized {
         let size = mem_grid.size();
         Self::edit_grid_with_size(mem_grid, size)
     }
+    /// Edit this grid with a specific virtual grid size (grid size is render area size + 1)
     fn edit_grid_with_size(mem_grid: &'a mut MG, grid_size: usize) -> MemoryGridEditor<Self, MD>;
 }
 

@@ -96,16 +96,6 @@ fn fill_chunk<const N: usize, VE: VoxelTypeEnum>(
             metadata.largest_lod().lvl(),
             metadata.lod_block_fill_thresh(),
         );
-        if chunk.pos.0 == (Point3 { x: 1, y: -1, z: -1 }) {
-            println!("Loading it!");
-            let d = &mut **data.lods[1].as_mut().expect("cyz").data_mut();
-            d.get_mut_for_loading().updated_bitmask_regions.regions = vec![BufferCopy {
-                src_offset: 1111,
-                dst_offset: 1111,
-                size: 1111,
-                ..Default::default()
-            }]
-        }
     }
 }
 
@@ -133,6 +123,18 @@ impl From<BufferCopy> for BufferCopyCmp {
 }
 
 fn assert_updates_eq(u1: Vec<VoxelLODUpdate>, u2: Vec<VoxelLODUpdate>) {
+    dbg!(
+        u1.len(),
+        u1.iter()
+            .cloned()
+            .map(|u| u
+                .bitmask_updated_regions
+                .into_iter()
+                .map(|r| r.into())
+                .collect())
+            .collect::<HashSet<Vec<BufferCopyCmp>>>()
+            .len()
+    );
     assert_eq!(
         u1.iter()
             .cloned()
@@ -272,169 +274,113 @@ fn test_queue_load_all() {
     {
         let mut editor = ChunkVoxelEditor::<Block, 5>::edit_grid(&mut grid);
 
-        unsafe {
-            editor.chunks[1640].lods[1]
-                .as_mut()
-                .unwrap()
-                .data_mut()
-                .set_missing();
-            editor.chunks[1640].lods[1]
-                .as_mut()
-                .unwrap()
-                .data_mut()
-                .get_mut_for_loading()
+        let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
+        let all_unloaded = [
+            BufferChunkState::Unloaded,
+            BufferChunkState::Unloaded,
+            BufferChunkState::Unloaded,
+        ];
+        loader.sync(
+            start_tlc,
+            &mut editor,
+            queue,
+            &all_unloaded,
+            &fill_chunk::<5, Block>,
+        );
+        while loader.active_loading_threads() > 0 {
+            loader.sync(
+                start_tlc,
+                &mut editor,
+                vec![],
+                &all_unloaded,
+                &fill_chunk::<5, Block>,
+            );
         }
-        .updated_bitmask_regions
-        .regions = vec![BufferCopy {
-            src_offset: 2222,
-            dst_offset: 2222,
-            size: 2222,
-            ..Default::default()
-        }];
-        unsafe {
-            editor.chunks[1640].lods[1]
-                .as_mut()
-                .unwrap()
-                .data_mut()
-                .set_valid();
-        }
-        // let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
-        // let all_unloaded = [
-        //     BufferChunkState::Unloaded,
-        //     BufferChunkState::Unloaded,
-        //     BufferChunkState::Unloaded,
-        // ];
-        // loader.sync(
-        //     start_tlc,
-        //     &mut editor,
-        //     queue,
-        //     &all_unloaded,
-        //     &fill_chunk::<5, Block>,
-        // );
-        // while loader.active_loading_threads() > 0 {
-        //     loader.sync(
-        //         start_tlc,
-        //         &mut editor,
-        //         vec![],
-        //         &all_unloaded,
-        //         &fill_chunk::<5, Block>,
-        //     );
-        // }
     }
 
     // Examine updates that would be made to staging buffers for each LOD
 
+    println!("GET UPDATES<<");
     let [u_0_0, u_0_1, u_0_2, u_1_0, u_2_0] = grid.get_updates();
     let dummy_bitmask = VoxelBitmask::new_vec(0);
     let dummy_ids = VoxelTypeIDs::new_vec(0);
 
-    // LOD 0 0
-    // assert_updates_eq(
-    //     u_0_0,
-    //     vec![VoxelLODUpdate {
-    //         bitmask: &dummy_bitmask,
-    //         bitmask_updated_regions: vec![BufferCopy {
-    //             src_offset: 0,
-    //             dst_offset: 0,
-    //             size: cubed(64) / 8,
-    //             ..Default::default()
-    //         }],
-    //         id_update: Some(VoxelIDUpdate {
-    //             ids: &dummy_ids,
-    //             updated_regions: vec![BufferCopy {
-    //                 src_offset: 0,
-    //                 dst_offset: 0,
-    //                 size: cubed(64),
-    //                 ..Default::default()
-    //             }],
-    //         }),
-    //     }],
-    // );
-
-    let gen_update = |x: u64, y: u64, z: u64, grid_size: u64, n_vox: u64| VoxelLODUpdate {
-        bitmask: &dummy_bitmask,
-        bitmask_updated_regions: vec![BufferCopy {
-            src_offset: 0,
-            dst_offset: (x + y * squared(grid_size) + z * grid_size) * n_vox / 8,
-            size: n_vox / 8,
-            ..Default::default()
-        }],
-        id_update: Some(VoxelIDUpdate {
-            ids: &dummy_ids,
-            updated_regions: vec![BufferCopy {
+    // LOD 0 0 --- offset = 0
+    assert_updates_eq(
+        u_0_0,
+        vec![VoxelLODUpdate {
+            bitmask: &dummy_bitmask,
+            bitmask_updated_regions: vec![BufferCopy {
                 src_offset: 0,
-                dst_offset: (x + y * squared(grid_size) + z * grid_size) * n_vox,
-                size: n_vox,
+                dst_offset: 0,
+                size: cubed(64) / 8,
                 ..Default::default()
             }],
-        }),
+            id_update: Some(VoxelIDUpdate {
+                ids: &dummy_ids,
+                updated_regions: vec![BufferCopy {
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: cubed(64),
+                    ..Default::default()
+                }],
+            }),
+        }],
+    );
+
+    let gen_update =
+        |x: u64, y: u64, z: u64, grid_size: u64, n_vox: u64, ids: bool| VoxelLODUpdate {
+            bitmask: &dummy_bitmask,
+            bitmask_updated_regions: vec![BufferCopy {
+                src_offset: 0,
+                dst_offset: (x + y * squared(grid_size) + z * grid_size) * (n_vox / 8).max(16),
+                size: (n_vox + 7) / 8,
+                ..Default::default()
+            }],
+            id_update: if ids {
+                Some(VoxelIDUpdate {
+                    ids: &dummy_ids,
+                    updated_regions: vec![BufferCopy {
+                        src_offset: 0,
+                        dst_offset: (x + y * squared(grid_size) + z * grid_size) * n_vox.max(16),
+                        size: n_vox,
+                        ..Default::default()
+                    }],
+                })
+            } else {
+                None
+            },
+        };
+
+    let gen_updates = |grid_size: u64, n_vox: u64, offset: u64, ids: bool| {
+        let offset_filter = |v: &u64| {
+            if offset == 0 {
+                *v != grid_size
+            } else {
+                *v != offset - 1
+            }
+        };
+        (0..grid_size)
+            .filter(offset_filter)
+            .flat_map(|x| {
+                (0..grid_size).filter(offset_filter).flat_map(move |y| {
+                    (0..grid_size)
+                        .filter(offset_filter)
+                        .map(move |z| gen_update(x, y, z, grid_size, n_vox, ids))
+                })
+            })
+            .collect::<Vec<_>>()
     };
 
-    // LOD 0 1
-    let n_vox = cubed(32);
-    let grid_size = 4;
-    assert_updates_eq(
-        u_0_1,
-        (0..grid_size - 1)
-            .into_iter()
-            .flat_map(|x| {
-                (0..grid_size - 1).into_iter().flat_map(move |y| {
-                    (0..grid_size - 1)
-                        .into_iter()
-                        .map(move |z| gen_update(x, y, z, grid_size, n_vox))
-                })
-            })
-            .collect(),
-    );
+    // LOD 0 1 --- offset = 3
+    assert_updates_eq(u_0_1, gen_updates(4, cubed(32), 3, true));
 
-    // LOD 0 2
-    let n_vox = cubed(16);
-    let grid_size = 8;
-    assert_updates_eq(
-        u_0_2,
-        (0..grid_size - 1)
-            .into_iter()
-            .flat_map(|x| {
-                (0..grid_size - 1).into_iter().flat_map(move |y| {
-                    (0..grid_size - 1)
-                        .into_iter()
-                        .map(move |z| gen_update(x, y, z, grid_size, n_vox))
-                })
-            })
-            .collect(),
-    );
+    // LOD 0 2 --- offset = 5
+    assert_updates_eq(u_0_2, gen_updates(8, cubed(16), 5, true));
 
-    // LOD 1 0
-    let n_vox = cubed(8);
-    let grid_size = 16;
-    assert_updates_eq(
-        u_1_0,
-        (0..grid_size - 1)
-            .into_iter()
-            .flat_map(|x| {
-                (0..grid_size - 1).into_iter().flat_map(move |y| {
-                    (0..grid_size - 1)
-                        .into_iter()
-                        .map(move |z| gen_update(x, y, z, grid_size, n_vox))
-                })
-            })
-            .collect(),
-    );
+    // LOD 1 0 --- offset = 9
+    assert_updates_eq(u_1_0, gen_updates(16, cubed(8), 9, true));
 
-    // LOD 2 0
-    let n_vox = cubed(8);
-    let grid_size = 16;
-    assert_updates_eq(
-        u_2_0,
-        (0..grid_size - 1)
-            .into_iter()
-            .flat_map(|x| {
-                (0..grid_size - 1).into_iter().flat_map(move |y| {
-                    (0..grid_size - 1)
-                        .into_iter()
-                        .map(move |z| gen_update(x, y, z, grid_size, n_vox))
-                })
-            })
-            .collect(),
-    );
+    // LOD 2 0 --- offset = 9
+    assert_updates_eq(u_2_0, gen_updates(16, 1, 9, false));
 }

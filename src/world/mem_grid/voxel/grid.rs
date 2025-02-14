@@ -20,6 +20,7 @@ use vulkano::memory::allocator::MemoryAllocator;
 
 #[derive(Debug, Getters)]
 pub struct VoxelMemoryGrid<const N: usize> {
+    #[get = "pub"]
     lods: [VoxelMemoryGridLOD; N],
     #[get = "pub"]
     metadata: VoxelMemoryGridMetadata,
@@ -230,12 +231,6 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
 pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum, const N: usize> {
     // TODO: pub IS TEMP
     pub lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
-}
-
-pub enum SetVoxelErr {
-    LODDoesNotExist,
-    LODNotLoaded,
-    LODVoxelsNotLoaded,
 }
 
 impl<'a, const N: usize, VE: VoxelTypeEnum>
@@ -523,7 +518,6 @@ mod tests {
     use cgmath::{Point3, Vector3};
     use enum_iterator::Sequence;
     use num_derive::{FromPrimitive, ToPrimitive};
-    use vulkano::command_buffer::BufferCopy;
 
     use crate::{
         renderer::test_context::TestContext,
@@ -570,7 +564,11 @@ mod tests {
     #[test]
     fn test_edit_voxel_grid() {
         let renderer_context = TestContext::new();
-        let start_tlc = TLCPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+        let start_tlc = TLCPos(Point3::<i64> {
+            x: -6,
+            y: -6,
+            z: -6,
+        });
         let (mut grid, _) = VoxelMemoryGrid::new(
             [
                 VoxelLODCreateParams {
@@ -622,32 +620,35 @@ mod tests {
 
         {
             let mut editor = ChunkVoxelEditor::<Block, 5>::edit_grid(&mut grid);
+            let chunk = editor.chunks[1640].lods[1].as_mut().unwrap().data_mut();
             unsafe {
-                editor.chunks[1640].lods[1]
-                    .as_mut()
-                    .unwrap()
-                    .data_mut()
-                    .set_missing();
-                editor.chunks[1640].lods[1]
-                    .as_mut()
-                    .unwrap()
-                    .data_mut()
-                    .get_mut_for_loading()
-                    .updated_bitmask_regions
-                    .regions = vec![BufferCopy {
-                    src_offset: 2222,
-                    dst_offset: 2222,
-                    size: 2222,
-                    ..Default::default()
-                }];
+                chunk.set_missing();
+                chunk.set_valid();
             }
-            unsafe {
-                editor.chunks[1640].lods[1]
-                    .as_mut()
-                    .unwrap()
-                    .data_mut()
-                    .set_valid();
-            }
+            chunk
+                .get_mut()
+                .unwrap()
+                .with_voxel_ids_mut()
+                .unwrap()
+                .update_full_buffer_gpu();
         }
+
+        dbg!(grid.lods[1].metadata().offsets());
+
+        dbg!(grid.lods[1]
+            .chunks()
+            .iter()
+            .map(|c| c.get().is_some())
+            .collect::<Vec<_>>());
+
+        assert!(
+            grid.lods[1].chunks()[2]
+                .get()
+                .expect("Chunk indexed was not valid; i.e. not indexed properly somewhere in this process")
+                .updated_bitmask_regions()
+                .regions
+                .len()
+                == 1
+        );
     }
 }

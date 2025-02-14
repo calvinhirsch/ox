@@ -41,13 +41,16 @@ pub struct LODMetadata {
     pub voxels_per_tlc: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Getters)]
 pub struct LODLayerData {
+    #[get = "pub"]
     bitmask: ChunkBitmask,
     // NOTE: `dst_offset` values in `BufferCopy`s are relative to the current chunk when stored here.
     // Later, the offset of these chunks in the full staging/local buffer will be added to it.
+    #[get = "pub"]
     // TODO: pub IS TEMP
     pub updated_bitmask_regions: ChunkUpdateRegions,
+    #[get = "pub"]
     voxel_ids: Option<ChunkVoxels>, // voxel ids are optional because some LODs only have a bitmask
 }
 
@@ -129,7 +132,7 @@ impl VoxelMemoryGridLOD {
     pub fn aggregate_updates(&mut self, clear_regions: bool) -> Vec<VoxelLODUpdate> {
         let voxels_per_tlc = self.metadata().extra().voxels_per_tlc;
 
-        let log = self.metadata().extra().lvl == 0 && self.metadata().extra().sublvl == 1;
+        let log = self.metadata().extra().lvl == 2 && self.metadata().extra().sublvl == 0;
 
         self.chunks_mut()
             .iter_mut()
@@ -139,16 +142,14 @@ impl VoxelMemoryGridLOD {
                     .get_mut()
                     .map(|chunk| {
                         if chunk.updated_bitmask_regions.regions.len() > 0 {
-                            // Offset for this chunk's bitmask in bytes
-                            let bm_offset = (chunk_i * voxels_per_tlc.max(128) / 8) as u64; // take max with 128 here because if voxels per tlc is < 128 we still use a full u128
+                            let bm_bytes_per_tlc = voxels_per_tlc.max(128) / 8; // take max with 128 here because if voxels per tlc is < 128 we still use a full u128
+                            let bm_offset = (chunk_i * bm_bytes_per_tlc) as u64; // offset for this chunk's bitmask in bytes
                             if log {
                                 println!(
-                                    "Updating chunk {}, bm_offset {}, bitmask full: {:?}, bitmask n_voxels: {}, regions: {:?}",
+                                    "Updating chunk {}, bm_offset {}, bitmask full: {:?}",
                                     chunk_i,
                                     bm_offset,
                                     &chunk.bitmask.bitmask.iter().all(|x| x.mask == u128::MAX),
-                                    &chunk.bitmask.n_voxels(),
-                                    &chunk.updated_bitmask_regions,
                                 );
                             }
 
@@ -168,7 +169,15 @@ impl VoxelMemoryGridLOD {
                                 id_update: chunk.voxel_ids.as_ref().map(|v| VoxelIDUpdate {
                                     ids: &v.ids,
                                     updated_regions: {
-                                        let scale = VoxelTypeIDs::BITS_PER_VOXEL as u64;
+                                        let scale = if voxels_per_tlc >= 128 {
+                                            VoxelTypeIDs::BITS_PER_VOXEL
+                                        } else {
+                                            ((voxels_per_tlc * VoxelTypeIDs::BITS_PER_VOXEL)
+                                                .max(128)
+                                                / 8)
+                                                / bm_bytes_per_tlc
+                                        }
+                                            as u64;
                                         chunk
                                             .updated_bitmask_regions
                                             .regions
@@ -176,13 +185,17 @@ impl VoxelMemoryGridLOD {
                                             .map(|r| BufferCopy {
                                                 src_offset: r.src_offset * scale,
                                                 dst_offset: (r.dst_offset + bm_offset) * scale,
-                                                size: r.size * scale as u64,
+                                                size: r.size * scale,
                                                 ..Default::default()
                                             })
                                             .collect()
                                     },
                                 }),
                             });
+
+                            if log && chunk_i == 2 {
+                                dbg!(&r);
+                            }
 
                             if clear_regions {
                                 chunk.updated_bitmask_regions.regions.clear();
