@@ -48,8 +48,7 @@ pub struct LODLayerData {
     // NOTE: `dst_offset` values in `BufferCopy`s are relative to the current chunk when stored here.
     // Later, the offset of these chunks in the full staging/local buffer will be added to it.
     #[get = "pub"]
-    // TODO: pub IS TEMP
-    pub updated_bitmask_regions: ChunkUpdateRegions,
+    updated_bitmask_regions: ChunkUpdateRegions,
     #[get = "pub"]
     voxel_ids: Option<ChunkVoxels>, // voxel ids are optional because some LODs only have a bitmask
 }
@@ -67,7 +66,6 @@ impl VoxelMemoryGridLOD {
             params.render_area_size % 2 == 1,
             "Render area sizes should be odd so they have a center chunk"
         );
-        println!("LOD {:?} == {}", params, lod_tlc_size);
         let bitmask =
             vec![ChunkBitmask::new_blank(cubed(lod_tlc_size)); cubed(params.render_area_size + 1)];
         let voxels = params.voxel_ids_binding.map(|_| {
@@ -132,8 +130,6 @@ impl VoxelMemoryGridLOD {
     pub fn aggregate_updates(&mut self, clear_regions: bool) -> Vec<VoxelLODUpdate> {
         let voxels_per_tlc = self.metadata().extra().voxels_per_tlc;
 
-        let log = self.metadata().extra().lvl == 2 && self.metadata().extra().sublvl == 0;
-
         self.chunks_mut()
             .iter_mut()
             .enumerate()
@@ -144,14 +140,6 @@ impl VoxelMemoryGridLOD {
                         if chunk.updated_bitmask_regions.regions.len() > 0 {
                             let bm_bytes_per_tlc = voxels_per_tlc.max(128) / 8; // take max with 128 here because if voxels per tlc is < 128 we still use a full u128
                             let bm_offset = (chunk_i * bm_bytes_per_tlc) as u64; // offset for this chunk's bitmask in bytes
-                            if log {
-                                println!(
-                                    "Updating chunk {}, bm_offset {}, bitmask full: {:?}",
-                                    chunk_i,
-                                    bm_offset,
-                                    &chunk.bitmask.bitmask.iter().all(|x| x.mask == u128::MAX),
-                                );
-                            }
 
                             let r = Some(VoxelLODUpdate {
                                 bitmask: &chunk.bitmask.bitmask,
@@ -192,10 +180,6 @@ impl VoxelMemoryGridLOD {
                                     },
                                 }),
                             });
-
-                            if log && chunk_i == 2 {
-                                dbg!(&r);
-                            }
 
                             if clear_regions {
                                 chunk.updated_bitmask_regions.regions.clear();

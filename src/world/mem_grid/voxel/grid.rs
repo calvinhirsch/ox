@@ -138,12 +138,7 @@ impl<const N: usize> VoxelMemoryGrid<N> {
     }
 
     pub fn get_updates(&mut self) -> [Vec<VoxelLODUpdate>; N] {
-        let mut i = 0;
-        self.lods.each_mut().map(|lod| {
-            // dbg!(i);
-            i += 1;
-            lod.aggregate_updates(true)
-        })
+        self.lods.each_mut().map(|lod| lod.aggregate_updates(true))
     }
 
     fn apply_to_lods_and_queue_chunks_mut<
@@ -229,8 +224,7 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
 
 #[derive(Debug)]
 pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum, const N: usize> {
-    // TODO: pub IS TEMP
-    pub lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+    lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
 impl<'a, const N: usize, VE: VoxelTypeEnum>
@@ -285,9 +279,6 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
     }
 
     pub unsafe fn mark_all_lods_missing(&mut self) {
-        if self.lods[0].is_some() {
-            println!("Taking chunk that has lvl 0 sublvl 0 LOD");
-        }
         for lod_o in self.lods.iter_mut() {
             if let Some(lod) = lod_o {
                 unsafe { (&mut **lod.data_mut()).set_missing() }
@@ -350,8 +341,7 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
 
 #[derive(Debug)]
 pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
-    // TODO: pub IS TEMP
-    pub lods: [Option<BorrowedVoxelLODChunkEditor<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+    lods: [Option<BorrowedVoxelLODChunkEditor<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
 unsafe impl<VE: VoxelTypeEnum, const N: usize> Send for BorrowedChunkVoxelEditor<VE, N> {}
@@ -515,7 +505,7 @@ impl GlobalVoxelPos {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Point3, Vector3};
+    use cgmath::Point3;
     use enum_iterator::Sequence;
     use num_derive::{FromPrimitive, ToPrimitive};
 
@@ -632,14 +622,6 @@ mod tests {
                 .unwrap()
                 .update_full_buffer_gpu();
         }
-
-        dbg!(grid.lods[1].metadata().offsets());
-
-        dbg!(grid.lods[1]
-            .chunks()
-            .iter()
-            .map(|c| c.get().is_some())
-            .collect::<Vec<_>>());
 
         assert!(
             grid.lods[1].chunks()[2]

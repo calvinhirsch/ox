@@ -1,7 +1,7 @@
 use crate::world::mem_grid::utils::index_for_pos;
 use crate::world::mem_grid::MemoryGridEditor;
 use crate::world::{BufferChunkState, TLCPos};
-use cgmath::{Array, EuclideanSpace, MetricSpace, Point3, Vector3};
+use cgmath::{Array, EuclideanSpace, MetricSpace, Vector3};
 use getset::{CopyGetters, Getters};
 use priority_queue::PriorityQueue;
 use std::hash::{Hash, Hasher};
@@ -319,8 +319,7 @@ impl<
         // If items in the prequeue are ready to be queued for loading (meaning all their data is available),
         // then add them to the queue.
         for i in (0..self.prequeue.len()).rev() {
-            if let Some(chunk_idx) = editor_chunk_i(dbg!(self.prequeue[i].pos)) {
-                dbg!(chunk_idx);
+            if let Some(chunk_idx) = editor_chunk_i(self.prequeue[i].pos) {
                 match editor.chunks[chunk_idx].mark_invalid() {
                     Ok(()) => {
                         // All data is present & was able to mark chunk invalid, so add it to priority queue
@@ -345,10 +344,6 @@ impl<
 
                     // Get index of current chunk. If this returns None, the chunk no longer is relevant
                     // and so we just skip loading it (it remains "invalid")
-                    if item.pos.0 == (Point3 { x: 1, y: -1, z: -1 }) {
-                        let idx = editor_chunk_i(item.pos);
-                        dbg!(&item, idx);
-                    }
                     if let Some(chunk_idx) = editor_chunk_i(item.pos) {
                         let meta = editor.metadata().clone();
                         let chunk = &mut editor.chunks[chunk_idx];

@@ -1,5 +1,6 @@
 use crate::renderer::buffers::BufferScheme;
 use derive_new::new;
+use getset::Getters;
 use smallvec::SmallVec;
 use std::cmp::max;
 use std::mem;
@@ -10,10 +11,11 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferIn
 use vulkano::descriptor_set::WriteDescriptorSet;
 
 /// Dual buffer scheme where different regions are copied each frame
-#[derive(new, Debug)]
+#[derive(new, Debug, Getters)]
 pub struct DualBufferWithDynamicCopyRegions<T: BufferContents> {
-    pub staging: Subbuffer<[T]>, // TODO: PUB IS TEMP, REMOVE IT
+    staging: Subbuffer<[T]>,
     device_local: Subbuffer<[T]>,
+    #[get = "pub"]
     copy_regions: Vec<BufferCopy>,
 }
 
@@ -37,12 +39,14 @@ impl<T: BufferContents> BufferScheme for DualBufferWithDynamicCopyRegions<T> {
         builder: &mut AutoCommandBufferBuilder<L, A>,
     ) {
         let copy_regions = mem::take(&mut self.copy_regions);
-        builder
-            .copy_buffer(CopyBufferInfo {
-                regions: SmallVec::from(copy_regions),
-                ..CopyBufferInfo::buffers(self.staging.clone(), self.device_local.clone())
-            })
-            .unwrap();
+        if copy_regions.len() > 0 {
+            builder
+                .copy_buffer(CopyBufferInfo {
+                    regions: SmallVec::from(copy_regions),
+                    ..CopyBufferInfo::buffers(self.staging.clone(), self.device_local.clone())
+                })
+                .unwrap();
+        }
     }
 }
 
@@ -52,26 +56,25 @@ impl<T: BufferContents + Copy + std::fmt::Debug> DualBufferWithDynamicCopyRegion
     pub fn update_staging_buffer_and_prep_copy(
         &mut self,
         src: &[T],
-        regions: impl IntoIterator<Item = BufferCopy>,
+        regions: impl IntoIterator<Item = BufferCopy>, // regions to copy from src to staging buffer
     ) {
         // Regions here are in bytes, so we need to rescale them to be indices
         let mut bitmask_write = self.staging.write().unwrap();
         for region in regions {
+            // copy from src to staging buffer
             let src_offset = region.src_offset as usize / size_of::<T>();
             let dst_offset = region.dst_offset as usize / size_of::<T>();
             let size = max(1, (region.size as usize) / size_of::<T>());
-            dbg!(src_offset, dst_offset, size);
             bitmask_write[dst_offset..dst_offset + size]
                 .copy_from_slice(&src[src_offset..src_offset + size]);
-            // dbg!((region.src_offset, region.dst_offset, region.size));
-            // self.copy_regions.push(BufferCopy {
-            //     src_offset: src_offset as u64,
-            //     dst_offset: dst_offset as u64,
-            //     size: region.size,
-            //     ..Default::default()
-            // });
-            println!();
-            self.copy_regions.push(region);
+
+            // queue copy from staging buffer to GPU
+            self.copy_regions.push(BufferCopy {
+                src_offset: region.dst_offset as u64,
+                dst_offset: region.dst_offset as u64, // staging buffer should be same as device local buffer
+                size: region.size as u64,
+                ..Default::default()
+            });
         }
     }
 }

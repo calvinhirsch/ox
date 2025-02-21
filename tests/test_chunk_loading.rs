@@ -123,18 +123,6 @@ impl From<BufferCopy> for BufferCopyCmp {
 }
 
 fn assert_updates_eq(u1: Vec<VoxelLODUpdate>, u2: Vec<VoxelLODUpdate>) {
-    dbg!(
-        u1.len(),
-        u1.iter()
-            .cloned()
-            .map(|u| u
-                .bitmask_updated_regions
-                .into_iter()
-                .map(|r| r.into())
-                .collect())
-            .collect::<HashSet<Vec<BufferCopyCmp>>>()
-            .len()
-    );
     assert_eq!(
         u1.iter()
             .cloned()
@@ -300,7 +288,6 @@ fn test_queue_load_all() {
 
     // Examine updates that would be made to staging buffers for each LOD
 
-    println!("GET UPDATES<<");
     let [u_0_0, u_0_1, u_0_2, u_1_0, u_2_0] = grid.get_updates();
     let dummy_bitmask = VoxelBitmask::new_vec(0);
     let dummy_ids = VoxelTypeIDs::new_vec(0);
