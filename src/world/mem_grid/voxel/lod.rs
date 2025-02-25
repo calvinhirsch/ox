@@ -325,7 +325,7 @@ pub struct LODLayerDataWithVoxelIDsMut<'a>(&'a mut LODLayerData);
 pub struct LODLayerDataWithVoxelIDs<'a>(&'a LODLayerData);
 
 impl<'a> LODLayerDataWithVoxelIDs<'a> {
-    fn voxel_ids(&self) -> &ChunkVoxels {
+    pub fn voxel_ids(&self) -> &ChunkVoxels {
         self.0.voxel_ids.as_ref().unwrap()
     }
 }
@@ -359,7 +359,7 @@ impl<'a> LODLayerDataWithVoxelIDsMut<'a> {
     /// Direct mutable access to voxel IDs. WARNING: modifying this will not automatically track
     /// updated regions so the changes may not be synced to the GPU. In order to do this, use
     /// either `overwrite` or `set_voxel`.
-    fn voxel_ids_mut(&mut self) -> &mut ChunkVoxels {
+    pub fn voxel_ids_mut(&mut self) -> &mut ChunkVoxels {
         self.0.voxel_ids.as_mut().unwrap()
     }
 
@@ -630,6 +630,11 @@ impl<'a, VE: VoxelTypeEnum> Drop for VoxelEditor<'a, VE> {
 
 #[cfg(test)]
 mod tests {
+    use enum_iterator::Sequence;
+    use num_derive::{FromPrimitive, ToPrimitive};
+
+    use crate::voxel_type::{Material, VoxelTypeDefinition};
+
     use super::*;
 
     #[test]
@@ -678,5 +683,55 @@ mod tests {
             indices[idx] = true;
         });
         assert!(indices.into_iter().all(|x| x));
+    }
+
+    #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive)]
+    pub enum Block {
+        AIR,
+        SOLID,
+    }
+
+    impl VoxelTypeEnum for Block {
+        type VoxelAttributes = ();
+
+        fn def(&self) -> VoxelTypeDefinition<Self::VoxelAttributes> {
+            use Block::*;
+            match *self {
+                AIR => VoxelTypeDefinition {
+                    material: Material::default(),
+                    is_visible: false,
+                    attributes: (),
+                },
+                SOLID => VoxelTypeDefinition {
+                    material: Material {
+                        color: [1., 0., 0.],
+                        emission_color: [1., 0., 0.],
+                        emission_strength: 1.2,
+                        ..Default::default()
+                    },
+                    is_visible: true,
+                    attributes: (),
+                },
+            }
+        }
+
+        fn empty() -> u8 {
+            0
+        }
+    }
+
+    #[test]
+    fn test_calc_full_bitmask() {
+        let mut voxels = ChunkVoxels::new_blank(32 * 32 * 32);
+        let mut bm = ChunkBitmask::new_blank(32 * 32 * 32);
+        voxels[0] = 1;
+        calc_full_bitmask::<Block>(&voxels, &mut bm);
+
+        let true_bm = {
+            let mut bm = ChunkBitmask::new_blank(32 * 32 * 32);
+            bm.set_block_true(0);
+            bm
+        };
+        assert_eq!(bm, true_bm);
     }
 }

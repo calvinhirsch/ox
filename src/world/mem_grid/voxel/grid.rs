@@ -512,6 +512,7 @@ mod tests {
     use crate::{
         renderer::test_context::TestContext,
         voxel_type::{Material, VoxelTypeDefinition},
+        world::mem_grid::voxel::ChunkBitmask,
     };
 
     const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
@@ -605,32 +606,60 @@ mod tests {
             Arc::clone(&renderer_context.memory_allocator) as Arc<dyn MemoryAllocator>,
             CHUNK_SIZE,
             start_tlc,
-            0.26,
+            0.124,
         );
 
         {
             let mut editor = ChunkVoxelEditor::<Block, 5>::edit_grid(&mut grid);
-            let chunk = editor.chunks[1640].lods[1].as_mut().unwrap().data_mut();
-            unsafe {
-                chunk.set_missing();
-                chunk.set_valid();
+            for lod in 1..=2 {
+                let chunk = editor.chunks[1640].lods[lod].as_mut().unwrap().data_mut();
+                unsafe {
+                    chunk.set_missing();
+                    chunk.set_valid();
+                }
             }
-            chunk
+            {
+                editor.chunks[1640].lods[1]
+                    .as_mut()
+                    .unwrap()
+                    .data_mut()
+                    .get_mut()
+                    .unwrap()
+                    .with_voxel_ids_mut()
+                    .unwrap()
+                    .overwrite::<Block>()
+                    .voxel_ids[0] = Block::SOLID as u8;
+            }
+            let l1_bitmask = editor.chunks[1640].lods[1]
+                .as_mut()
+                .unwrap()
+                .data_mut()
                 .get_mut()
                 .unwrap()
-                .with_voxel_ids_mut()
+                .bitmask();
+            let true_l1_bitmask = {
+                let mut bm = ChunkBitmask::new_blank(l1_bitmask.n_voxels());
+                bm.set_block_true(0);
+                bm
+            };
+            assert_eq!(*l1_bitmask, true_l1_bitmask);
+
+            let l2_bitmask = editor.chunks[1640].lods[2]
+                .as_mut()
                 .unwrap()
-                .update_full_buffer_gpu();
+                .data_mut()
+                .get_mut()
+                .unwrap()
+                .bitmask();
+            let true_l2_bitmask = ChunkBitmask::new_blank(l2_bitmask.n_voxels());
+            assert_eq!(*l2_bitmask, true_l2_bitmask);
         }
 
-        assert!(
-            grid.lods[1].chunks()[2]
-                .get()
-                .expect("Chunk indexed was not valid; i.e. not indexed properly somewhere in this process")
-                .updated_bitmask_regions()
-                .regions
-                .len()
-                == 1
-        );
+        assert!(grid.lods[1].chunks()[2].get().expect(
+            "Chunk indexed was not valid; i.e. not indexed properly somewhere in this process",
+        ).updated_bitmask_regions().regions.len() == 1);
+        assert!(grid.lods[1].chunks()[2].get().unwrap().bitmask().get(0));
+        assert!(!grid.lods[1].chunks()[2].get().unwrap().bitmask().get(1));
+        assert!(!grid.lods[2].chunks()[2].get().unwrap().bitmask().get(0));
     }
 }

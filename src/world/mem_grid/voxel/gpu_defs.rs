@@ -2,7 +2,7 @@ use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use std::ops::{Index, IndexMut};
 use vulkano::command_buffer::BufferCopy;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChunkVoxels {
     pub ids: Vec<VoxelTypeIDs>,
 }
@@ -11,7 +11,7 @@ impl Index<usize> for ChunkVoxels {
     type Output = u8;
     fn index(&self, i: usize) -> &u8 {
         &self.ids[i * VoxelTypeIDs::BITS_PER_VOXEL / 128].indices
-            [i % VoxelTypeIDs::BITS_PER_VOXEL / 128]
+            [i % (128 / VoxelTypeIDs::BITS_PER_VOXEL)]
     }
 }
 impl IndexMut<usize> for ChunkVoxels {
@@ -37,17 +37,15 @@ impl ChunkVoxels {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChunkBitmask {
     pub bitmask: Vec<VoxelBitmask>,
-    pub loaded: bool,
 }
 
 impl ChunkBitmask {
     pub fn new_blank(n_voxels: usize) -> Self {
         ChunkBitmask {
             bitmask: VoxelBitmask::new_vec(n_voxels),
-            loaded: false,
         }
     }
 
