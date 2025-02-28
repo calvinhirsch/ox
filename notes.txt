@@ -1,4 +1,5 @@
 TO-DO rust:
+ - Look into whether chunk loading would break if you skip the buffer chunk loading zone at the edge of chunk
  - Look into using Pin for making sure World doesn't move during chunk loading--or make some function that owns world so user cannot move it
  - Macros for
     - Deriving DataComponentWrapper

@@ -254,7 +254,7 @@ impl LODLayerData {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        lod_block_fill_thresh: f32,
+        block_fill_thresh: f32,
     ) {
         apply_to_voxels_in_lod(
             curr_lvl,
@@ -271,7 +271,7 @@ impl LODLayerData {
                     lower_sublvl,
                     chunk_size,
                     largest_chunk_lvl,
-                    lod_block_fill_thresh,
+                    block_fill_thresh,
                 )
             },
         );
@@ -286,7 +286,7 @@ impl LODLayerData {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        lod_block_fill_thresh: f32,
+        block_fill_thresh: f32,
     ) {
         // Index of the lower corner of the 2x2x2 area in the lower LOD data we want to look at
         let mut visible_count = 0;
@@ -310,7 +310,7 @@ impl LODLayerData {
 
         self.bitmask.set_block(
             voxel_index,
-            visible_count as f32 >= lod_block_fill_thresh * count as f32,
+            visible_count as f32 > block_fill_thresh * count as f32,
         );
         self.updated_bitmask_regions.regions.push(BufferCopy {
             src_offset: (voxel_index / 8) as DeviceSize,

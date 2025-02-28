@@ -77,7 +77,6 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         memory_allocator: Arc<dyn MemoryAllocator>,
         chunk_size: ChunkSize,
         start_tlc: TLCPos<i64>,
-        lod_block_fill_thresh: f32,
     ) -> (Self, VoxelData<N>) {
         for p in lod_params.iter() {
             p.validate(chunk_size);
@@ -123,7 +122,7 @@ impl<const N: usize> VoxelMemoryGrid<N> {
                     sublvl: largest_sublvl,
                 },
                 chunk_size,
-                lod_block_fill_thresh,
+                lod_block_fill_thresh: 0.00000001,
             },
         };
 
@@ -162,27 +161,6 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         chunks.into_values().collect()
     }
 
-    fn apply_to_lods_and_queue_chunks<
-        F: FnMut(&VoxelMemoryGridLOD) -> Vec<ChunkLoadQueueItem<()>>,
-    >(
-        &self,
-        mut to_apply: F,
-    ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadQueueItemData<N>>> {
-        let mut chunks = HashMap::new();
-
-        for (i, lod) in self.lods.iter().enumerate() {
-            for item in to_apply(lod) {
-                let e = chunks.entry(item.pos.0).or_insert(ChunkLoadQueueItem {
-                    pos: item.pos,
-                    data: VoxelChunkLoadQueueItemData { lods: [false; N] },
-                });
-                e.data.lods[i] = true;
-            }
-        }
-
-        chunks.into_values().collect()
-    }
-
     fn largest_lod(&self) -> &VoxelMemoryGridLOD {
         self.lod(
             self.metadata().largest_lod.lvl,
@@ -204,13 +182,6 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
         shift: &crate::world::mem_grid::MemGridShift,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
         self.apply_to_lods_and_queue_chunks_mut(|lod| lod.shift(shift))
-    }
-
-    fn load_buffer_chunks(
-        &self,
-        cfg: &crate::world::mem_grid::LoadBufferChunks,
-    ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        self.apply_to_lods_and_queue_chunks(|lod| lod.load_buffer_chunks(cfg))
     }
 
     fn size(&self) -> usize {
@@ -379,11 +350,16 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
         largest_chunk_lvl: u8,
         lod_block_fill_thresh: f32,
     ) {
+        struct LodId {
+            index: usize,
+            lvl: u8,
+            sublvl: u8,
+        }
+
         // Last lvl/sublvl that contained voxel ID info
-        let (mut last_vox_lvl, mut last_vox_sublvl, mut last_vox_idx) = (None, None, None);
+        let mut last_vox_lod: Option<LodId> = None;
         // Last lvl/sublvl that contained bitmask info
-        let (mut last_bitmask_lvl, mut last_bitmask_sublvl, mut last_bitmask_idx) =
-            (None, None, None);
+        let mut first_bitmask_lod: Option<LodId> = None;
 
         let len = self.lods.len();
         IteratorWithIndexing::new(&mut self.lods, len).apply(|i, lod, lods_to_index| {
@@ -408,21 +384,19 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
 
                     // Need to load the info in this chunk
                     if let Some(mut data) = data.with_voxel_ids_mut() {
-                        if let (Some(l_lvl), Some(l_sublvl), Some(l_i)) =
-                            (last_vox_lvl, last_vox_sublvl, last_vox_idx)
-                        {
+                        if let Some(last_vox_lod) = last_vox_lod.as_ref() {
                             // Load voxels based on higher fidelity LOD that is already loaded
                             data.calc_from_lower_lod_voxels::<VE>(
                                 unsafe {
-                                    (&**lods_to_index[l_i].as_ref().unwrap().data())
+                                    (&**lods_to_index[last_vox_lod.index].as_ref().unwrap().data())
                                         .get_for_loading()
                                         .with_voxel_ids()
                                         .unwrap()
                                 },
                                 lvl,
                                 sublvl,
-                                l_lvl,
-                                l_sublvl,
+                                last_vox_lod.lvl,
+                                last_vox_lod.sublvl,
                                 chunk_size,
                                 largest_chunk_lvl,
                                 lod_block_fill_thresh,
@@ -439,14 +413,16 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                             );
                         }
 
-                        last_vox_lvl = Some(lvl);
-                        last_vox_sublvl = Some(sublvl);
-                        last_vox_idx = Some(i);
+                        last_vox_lod = Some(LodId {
+                            lvl,
+                            sublvl,
+                            index: i,
+                        });
                     } else {
                         // If this chunk only has a bitmask, update from previous LOD bitmask
                         data.update_bitmask_from_lower_lod(
                             unsafe {
-                                (&**lods_to_index[last_bitmask_idx.unwrap()]
+                                (&**lods_to_index[first_bitmask_lod.as_ref().unwrap().index]
                                     .as_ref()
                                     .unwrap()
                                     .data())
@@ -454,17 +430,21 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                             },
                             lvl,
                             sublvl,
-                            last_bitmask_lvl.unwrap(),
-                            last_bitmask_sublvl.unwrap(),
+                            first_bitmask_lod.as_ref().unwrap().lvl,
+                            first_bitmask_lod.as_ref().unwrap().sublvl,
                             chunk_size,
                             largest_chunk_lvl,
-                            lod_block_fill_thresh,
+                            0.,
                         )
                     }
 
-                    last_bitmask_lvl = Some(lvl);
-                    last_bitmask_sublvl = Some(sublvl);
-                    last_bitmask_idx = Some(i);
+                    if first_bitmask_lod.is_none() {
+                        first_bitmask_lod = Some(LodId {
+                            lvl,
+                            sublvl,
+                            index: i,
+                        });
+                    }
                 }
             }
         });
@@ -606,7 +586,6 @@ mod tests {
             Arc::clone(&renderer_context.memory_allocator) as Arc<dyn MemoryAllocator>,
             CHUNK_SIZE,
             start_tlc,
-            0.124,
         );
 
         {

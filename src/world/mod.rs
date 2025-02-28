@@ -1,15 +1,11 @@
 use cgmath::{Array, Point3, Vector3};
 use getset::Getters;
 use loader::{BorrowChunkForLoading, BorrowedChunk};
-use mem_grid::{
-    LoadAxisBufferChunks, LoadBufferChunks, MemGridShift, MemoryGridEditorChunk, ShiftGridAxis,
-    ShiftGridAxisVal,
-};
+use mem_grid::{MemGridShift, MemoryGridEditorChunk, ShiftGridAxis, ShiftGridAxisVal};
 use num_traits::Zero;
 use std::marker::PhantomData;
 use std::mem;
 use std::time::Duration;
-use unzip_array_of_tuple::unzip_array_of_tuple;
 
 pub mod camera;
 pub mod loader;
@@ -128,82 +124,66 @@ impl<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>>
                 self.metadata.tlc_size as f32 * (self.mem_grid.size() - 2) as f32 / 2.,
             );
 
-        let (shift, load_buffer_chunks) = unzip_array_of_tuple([0, 1, 2].map(|a| {
-            let within_upper_load_thresh = self.metadata.tlc_size as f32 - center_chunk_cam_pos[a]
+        // Shift memory grid and handle buffer chunks
+        MemGridShift::new([0, 1, 2].map(|ax| {
+            let within_upper_load_thresh = self.metadata.tlc_size as f32 - center_chunk_cam_pos[ax]
                 < self.metadata.tlc_load_dist_thresh as f32;
             let within_lower_load_thresh =
-                center_chunk_cam_pos[a] < self.metadata.tlc_load_dist_thresh as f32;
-            let prev_buffer_chunk_state = self.metadata.buffer_chunk_states[a];
+                center_chunk_cam_pos[ax] < self.metadata.tlc_load_dist_thresh as f32;
+            let prev_buffer_chunk_state = self.metadata.buffer_chunk_states[ax];
 
-            // If we moved TLCs, that means the trailing buffer chunks are loaded because we just moved off of them--set them to represent this
-            if tlc_delta[a] != 0 {
-                self.metadata.buffer_chunk_states[a] = {
-                    if tlc_delta[a] > 0 {
+            if tlc_delta[ax] == 0 {
+                if within_upper_load_thresh {
+                    self.metadata.buffer_chunk_states[ax] = BufferChunkState::LoadedUpper;
+                    match prev_buffer_chunk_state {
+                        BufferChunkState::LoadedUpper => {
+                            ShiftGridAxis::MaintainUpperLoadedBufferChunks
+                        }
+                        _ => ShiftGridAxis::LoadUpperBufferChunks,
+                    }
+                } else if within_lower_load_thresh {
+                    self.metadata.buffer_chunk_states[ax] = BufferChunkState::LoadedLower;
+                    match prev_buffer_chunk_state {
+                        BufferChunkState::LoadedLower => {
+                            ShiftGridAxis::MaintainLowerLoadedBufferChunks
+                        }
+                        _ => ShiftGridAxis::LoadLowerBufferChunks,
+                    }
+                } else {
+                    // maintain whatever previous buffer chunk state was
+                    match prev_buffer_chunk_state {
+                        BufferChunkState::LoadedLower => {
+                            ShiftGridAxis::MaintainLowerLoadedBufferChunks
+                        }
+                        BufferChunkState::LoadedUpper => {
+                            ShiftGridAxis::MaintainUpperLoadedBufferChunks
+                        }
+                        BufferChunkState::Unloaded => ShiftGridAxis::DoNothing,
+                    }
+                }
+            } else {
+                // If we moved TLCs, that means the trailing buffer chunks are loaded because we just moved off of them--set them to represent this
+                // (this value won't be used until next frame)
+                self.metadata.buffer_chunk_states[ax] = {
+                    if tlc_delta[ax] > 0 {
                         BufferChunkState::LoadedLower
                     } else {
                         BufferChunkState::LoadedUpper
                     }
                 };
-            }
 
-            let load_buffer_chunks = if tlc_delta[a] == 0 {
-                if within_upper_load_thresh {
-                    self.metadata.buffer_chunk_states[a] = BufferChunkState::LoadedUpper;
-                    if prev_buffer_chunk_state != BufferChunkState::LoadedUpper {
-                        LoadAxisBufferChunks::Upper
-                    } else {
-                        LoadAxisBufferChunks::None
-                    }
-                } else if within_lower_load_thresh {
-                    self.metadata.buffer_chunk_states[a] = BufferChunkState::LoadedLower;
-                    if prev_buffer_chunk_state != BufferChunkState::LoadedLower {
-                        LoadAxisBufferChunks::Lower
-                    } else {
-                        LoadAxisBufferChunks::None
-                    }
-                } else {
-                    LoadAxisBufferChunks::None
-                }
-            } else {
-                LoadAxisBufferChunks::None
-            };
-
-            (
-                if tlc_delta[a] == 0 {
-                    if load_buffer_chunks == LoadAxisBufferChunks::None {
-                        if prev_buffer_chunk_state == BufferChunkState::LoadedLower {
-                            ShiftGridAxis::MaintainLowerLoadedBufferChunks
-                        } else if prev_buffer_chunk_state == BufferChunkState::LoadedUpper {
-                            ShiftGridAxis::MaintainUpperLoadedBufferChunks
+                ShiftGridAxis::Shift(ShiftGridAxisVal::new(
+                    tlc_delta[ax] as i32,
+                    prev_buffer_chunk_state
+                        == (if tlc_delta[ax] > 0 {
+                            BufferChunkState::LoadedUpper
                         } else {
-                            ShiftGridAxis::DoNothing
-                        }
-                    } else {
-                        ShiftGridAxis::DoNothing
-                    }
-                } else {
-                    ShiftGridAxis::Shift(ShiftGridAxisVal::new(
-                        tlc_delta[a] as i32,
-                        prev_buffer_chunk_state
-                            == (if tlc_delta[a] > 0 {
-                                BufferChunkState::LoadedUpper
-                            } else {
-                                BufferChunkState::LoadedLower
-                            }),
-                    ))
-                },
-                load_buffer_chunks,
-            )
-        }));
-
-        self.metadata.buffer_chunk_states;
-
-        self.chunks_to_load
-            .extend(self.mem_grid.shift(&MemGridShift(shift)));
-        self.chunks_to_load.extend(
-            self.mem_grid
-                .load_buffer_chunks(&LoadBufferChunks(load_buffer_chunks)),
-        );
+                            BufferChunkState::LoadedLower
+                        }),
+                ))
+            }
+        }))
+        .map(|shift| self.chunks_to_load.extend(self.mem_grid.shift(&shift)));
     }
 
     pub fn set_camera_res(&mut self, width: u32, height: u32) {

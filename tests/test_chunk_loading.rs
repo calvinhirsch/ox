@@ -209,7 +209,6 @@ fn test_queue_load_all() {
         Arc::clone(&renderer_context.memory_allocator) as Arc<dyn MemoryAllocator>,
         CHUNK_SIZE,
         start_tlc,
-        0.26,
     );
 
     let expected_queue: HashSet<_> = {

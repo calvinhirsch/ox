@@ -83,6 +83,8 @@ pub enum ShiftGridAxis {
     MaintainUpperLoadedBufferChunks,
     // Same as above but for lower buffer chunks.
     MaintainLowerLoadedBufferChunks,
+    LoadUpperBufferChunks,
+    LoadLowerBufferChunks,
     DoNothing,
 }
 impl ShiftGridAxis {
@@ -93,13 +95,27 @@ impl ShiftGridAxis {
         }
     }
 
-    /// When shifting along another axis, what chunk range needs to be loaded in this axis.
+    /// When shifting/loading along this axis, what chunk range needs to be loaded
+    fn load_range_for_main_axis(&self, active_grid_size: usize) -> Option<Range<i32>> {
+        match self {
+            ShiftGridAxis::Shift(shift) => Some(shift.load_range_when_shifting(active_grid_size)),
+            ShiftGridAxis::MaintainUpperLoadedBufferChunks
+            | ShiftGridAxis::MaintainLowerLoadedBufferChunks => None,
+            ShiftGridAxis::LoadUpperBufferChunks => {
+                Some(active_grid_size as i32..active_grid_size as i32 + 1)
+            }
+            ShiftGridAxis::LoadLowerBufferChunks => Some(-1..0),
+            ShiftGridAxis::DoNothing => None,
+        }
+    }
+
+    /// When shifting/loading along another axis, what chunk range needs to be loaded in this axis.
     /// Considerations:
     /// 1. Buffer chunks: if buffer chunks are loaded then we need to load new ones in parallel with the shift.
     /// 2. Multiple shifts: if this axis is also being shifted, the chunk range to load should reflect this. This
     ///     creates a problem where corner/edge chunks might be double counted by each axis's individual shift.
     ///     Thus, `load_overlapping` can be used to set whether to include these in the range.
-    fn load_range_when_shifting_other_axis(
+    fn load_range_for_other_axis(
         &self,
         active_grid_size: usize,
         load_overlapping: bool,
@@ -121,8 +137,10 @@ impl ShiftGridAxis {
                 }
             }
             ShiftGridAxis::DoNothing => 0..active_grid_size as i32,
-            ShiftGridAxis::MaintainUpperLoadedBufferChunks => 0..active_grid_size as i32 + 1,
-            ShiftGridAxis::MaintainLowerLoadedBufferChunks => -1..active_grid_size as i32,
+            ShiftGridAxis::MaintainUpperLoadedBufferChunks
+            | ShiftGridAxis::LoadUpperBufferChunks => 0..active_grid_size as i32 + 1,
+            ShiftGridAxis::MaintainLowerLoadedBufferChunks
+            | ShiftGridAxis::LoadLowerBufferChunks => -1..active_grid_size as i32,
         }
     }
 }
@@ -135,8 +153,23 @@ fn abc_pos<T: Into<i64>>(av: T, bv: T, cv: T, a: usize, b: usize, c: usize) -> T
     TLCPos(chunk)
 }
 
-pub struct MemGridShift(pub [ShiftGridAxis; 3]);
+pub struct MemGridShift([ShiftGridAxis; 3]);
 impl MemGridShift {
+    pub fn new(axes: [ShiftGridAxis; 3]) -> Option<Self> {
+        if axes.iter().all(|x| {
+            matches!(
+                *x,
+                ShiftGridAxis::DoNothing
+                    | ShiftGridAxis::MaintainLowerLoadedBufferChunks
+                    | ShiftGridAxis::MaintainUpperLoadedBufferChunks
+            )
+        }) {
+            None
+        } else {
+            Some(MemGridShift(axes))
+        }
+    }
+
     pub fn offset_delta(&self) -> Vector3<i32> {
         Vector3 {
             x: self.0[0].as_shift().map(|s| s.chunks).unwrap_or(0),
@@ -164,126 +197,33 @@ impl MemGridShift {
         ]
         .into_iter()
         .filter_map(|(a, (b, load_overlapping_b), (c, load_overlapping_c))| {
-            self.0[a].as_shift().map(|shift_val| {
-                shift_val
-                    .load_range_when_shifting(active_grid_size)
-                    .into_iter()
-                    .flat_map(|av| {
-                        self.0[b]
-                            .load_range_when_shifting_other_axis(
-                                active_grid_size,
-                                load_overlapping_b,
-                            )
-                            .into_iter()
-                            .flat_map(|bv| {
-                                self.0[c]
-                                    .load_range_when_shifting_other_axis(
-                                        active_grid_size,
-                                        load_overlapping_c,
-                                    )
-                                    .into_iter()
-                                    .map(|cv| {
-                                        f(TLCPos(
-                                            abc_pos(av, bv as i32, cv as i32, a, b, c).0
-                                                + start_tlc.0.to_vec(),
-                                        ))
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
-        })
-        .flatten()
-        .collect()
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LoadAxisBufferChunks {
-    None,
-    Lower,
-    Upper,
-}
-impl LoadAxisBufferChunks {
-    fn load_range(&self, active_grid_size: usize) -> Option<Range<i32>> {
-        match self {
-            LoadAxisBufferChunks::None => None,
-            LoadAxisBufferChunks::Upper => {
-                Some(active_grid_size as i32..active_grid_size as i32 + 1)
-            }
-            LoadAxisBufferChunks::Lower => Some(-1..0),
-        }
-    }
-
-    fn load_range_when_loading_other_axis(
-        &self,
-        active_grid_size: usize,
-        load_overlapping: bool,
-    ) -> Range<i32> {
-        match self {
-            LoadAxisBufferChunks::None => 0..active_grid_size as i32,
-            LoadAxisBufferChunks::Upper => {
-                0..active_grid_size as i32 + (if load_overlapping { 1 } else { 0 })
-            }
-            LoadAxisBufferChunks::Lower => {
-                (if load_overlapping { -1 } else { 0 })..active_grid_size as i32
-            }
-        }
-    }
-}
-
-pub struct LoadBufferChunks(pub [LoadAxisBufferChunks; 3]);
-impl LoadBufferChunks {
-    pub fn collect_chunks_to_load<O, F: Fn(TLCPos<i64>) -> O>(
-        &self,
-        mem_grid_size: usize,
-        start_tlc: TLCPos<i64>,
-        f: F,
-    ) -> Vec<O> {
-        // ENHANCEMENT: Do this without all the collect()s in the middle, causes closure escape problems though
-
-        let active_grid_size = mem_grid_size - 1;
-
-        // Note: when loading buffer chunks for multiple axes at once, this scheme would queue the corner chunks to load twice.
-        // The `load_overlapping_*` bools are to make sure this only happens once without needing to dedup after.
-        [
-            (0, (1, true), (2, true)),
-            (1, (2, true), (0, false)),
-            (2, (0, false), (1, false)),
-        ]
-        .into_iter()
-        .filter_map(|(a, (b, load_overlapping_b), (c, load_overlapping_c))| {
-            self.0[a].load_range(active_grid_size).map(|load_range| {
-                load_range
-                    .into_iter()
-                    .flat_map(|av| {
-                        self.0[b]
-                            .load_range_when_loading_other_axis(
-                                active_grid_size,
-                                load_overlapping_b,
-                            )
-                            .into_iter()
-                            .flat_map(|bv| {
-                                self.0[c]
-                                    .load_range_when_loading_other_axis(
-                                        active_grid_size,
-                                        load_overlapping_c,
-                                    )
-                                    .into_iter()
-                                    .map(|cv| {
-                                        f(TLCPos(
-                                            abc_pos(av, bv as i32, cv as i32, a, b, c).0
-                                                + start_tlc.0.to_vec(),
-                                        ))
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
+            self.0[a]
+                .load_range_for_main_axis(active_grid_size)
+                .map(|range| {
+                    range
+                        .flat_map(|av| {
+                            self.0[b]
+                                .load_range_for_other_axis(active_grid_size, load_overlapping_b)
+                                .into_iter()
+                                .flat_map(|bv| {
+                                    self.0[c]
+                                        .load_range_for_other_axis(
+                                            active_grid_size,
+                                            load_overlapping_c,
+                                        )
+                                        .into_iter()
+                                        .map(|cv| {
+                                            f(TLCPos(
+                                                abc_pos(av, bv as i32, cv as i32, a, b, c).0
+                                                    + start_tlc.0.to_vec(),
+                                            ))
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                })
         })
         .flatten()
         .collect()
@@ -296,14 +236,11 @@ pub trait MemoryGrid {
     /// Queue all chunks in memory grid to be loaded. Does not queue buffer chunks or change their state.
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     /// Shift this memory grid. This should modify its offsets and queue new chunks to load if the shift is nonzero.
-    /// This doesn't need to invalidate chunks it returns as this should be done by the chunk loader.
+    /// This doesn't need to invalidate chunks it returns as this should be done by the chunk loader. This also
+    /// specified what to do with buffer chunks, whether that is to maintain them when shifting or load new ones.
     fn shift(
         &mut self,
         shift: &MemGridShift,
-    ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
-    fn load_buffer_chunks(
-        &self,
-        cfg: &LoadBufferChunks,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     /// Size including any buffer chunks
     fn size(&self) -> usize;

@@ -114,6 +114,9 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
         &mut self,
         shift: &MemGridShift,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
+        // Apply the shift to start_tlc
+        self.metadata.start_tlc.0 += shift.offset_delta().cast::<i64>().unwrap();
+
         // Apply the shift to grid offset
         self.metadata.offsets = TLCVector(
             amod(
@@ -128,15 +131,6 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
 
         // Queue all the chunks that need to be loaded based on the shift
         shift.collect_chunks_to_load(self.metadata().size, self.metadata().start_tlc, |pos| {
-            ChunkLoadQueueItem { pos, data: () }
-        })
-    }
-
-    fn load_buffer_chunks(
-        &self,
-        cfg: &super::LoadBufferChunks,
-    ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        cfg.collect_chunks_to_load(self.metadata().size, self.metadata().start_tlc, |pos| {
             ChunkLoadQueueItem { pos, data: () }
         })
     }
