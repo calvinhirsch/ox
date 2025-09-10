@@ -124,24 +124,25 @@ impl ShiftGridAxis {
             ShiftGridAxis::DoNothing => 0..active_grid_size as i32,
             ShiftGridAxis::MaintainUpperLoadedBufferChunks => 0..active_grid_size as i32 + 1,
             ShiftGridAxis::MaintainLowerLoadedBufferChunks => -1..active_grid_size as i32,
-            other => {
-                let amt = match other {
-                    ShiftGridAxis::Shift(shift_val) => shift_val.chunks,
-                    ShiftGridAxis::LoadUpperBufferChunks => 1,
-                    ShiftGridAxis::LoadLowerBufferChunks => -1,
-                    ShiftGridAxis::DoNothing
-                    | ShiftGridAxis::MaintainLowerLoadedBufferChunks
-                    | ShiftGridAxis::MaintainUpperLoadedBufferChunks => unreachable!(),
-                };
-
-                if amt > 0 {
-                    amt..(if load_overlapping {
-                        active_grid_size as i32 + amt
+            ShiftGridAxis::LoadUpperBufferChunks => {
+                0..(active_grid_size as i32) + (if load_overlapping { 1 } else { 0 })
+            }
+            ShiftGridAxis::LoadLowerBufferChunks => {
+                0 - (if load_overlapping { 1 } else { 0 })..active_grid_size as i32
+            }
+            ShiftGridAxis::Shift(shift_val) => {
+                if shift_val.chunks > 0 {
+                    shift_val.chunks..(if load_overlapping {
+                        active_grid_size as i32 + shift_val.chunks
                     } else {
                         active_grid_size as i32
                     })
                 } else {
-                    (if load_overlapping { amt } else { 0 })..(active_grid_size as i32 - amt)
+                    (if load_overlapping {
+                        shift_val.chunks
+                    } else {
+                        0
+                    })..(active_grid_size as i32 - shift_val.chunks)
                 }
             }
         }

@@ -31,11 +31,14 @@ pub struct VoxelPos<T>(pub Point3<T>);
 #[derive(Clone, Copy, Debug)]
 pub struct VoxelVector<T>(pub Vector3<T>);
 
-#[derive(Debug)]
+#[derive(Getters, Debug)]
 pub struct WorldMetadata {
+    #[get = "pub"]
     tlc_size: usize,
+    #[get = "pub"]
     tlc_load_dist_thresh: u32,
     // State of the buffer chunks in each axis
+    #[get = "pub"]
     buffer_chunk_states: [BufferChunkState; 3],
 }
 
@@ -49,6 +52,7 @@ pub struct World<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueIte
     chunks_to_load: Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>>,
     #[get = "pub"]
     camera: Camera,
+    #[get = "pub"]
     metadata: WorldMetadata,
 }
 

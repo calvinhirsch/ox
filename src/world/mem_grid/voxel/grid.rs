@@ -310,8 +310,9 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Getters, Debug)]
 pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
+    #[get = "pub"]
     lods: [Option<BorrowedVoxelLODChunkEditor<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 

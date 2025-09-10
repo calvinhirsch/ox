@@ -169,15 +169,9 @@ where
     metadata_type: PhantomData<MD>,
     active_threads: Vec<Option<Receiver<BC>>>,
     #[get = "pub"]
-    prequeue: Vec<ChunkLoadQueueItem<QI>>,
-    #[get = "pub"]
     queue: PriorityQueue<ChunkLoadQueueItem<QI>, u32>,
     #[get_copy = "pub"]
-    prequeued_last: usize,
-    #[get_copy = "pub"]
     queued_last: usize,
-    #[get_copy = "pub"]
-    skipped_queue_last: usize,
     #[get_copy = "pub"]
     started_loading_last: usize,
     #[get_copy = "pub"]
@@ -225,11 +219,8 @@ impl<QI: Eq, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
         ChunkLoader {
             metadata_type: PhantomData,
             active_threads: (0..params.n_threads).map(|_| None).collect(),
-            prequeue: vec![],
             queue: PriorityQueue::new(),
-            prequeued_last: 0,
             queued_last: 0,
-            skipped_queue_last: 0,
             started_loading_last: 0,
             skipped_loading_last: 0,
             finished_loading_last: 0,
@@ -245,14 +236,13 @@ impl<QI: Eq, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
 
     pub fn print_status(&self) {
         println!(
-            "CHUNK LOADER:  in prequeue: {}, in queue: {},  loading: {}",
-            self.prequeue.len(),
+            "CHUNK LOADER:  in queue: {},  loading: {}",
             self.queue.len(),
             self.active_loading_threads(),
         );
         println!(
-            "  Last frame:  prequeued: {}, queued: {}, skipped_queue: {}, started loading: {}, skipped loading: {}, finished loading: {}",
-            self.prequeued_last, self.queued_last, self.skipped_queue_last, self.started_loading_last, self.skipped_loading_last, self.finished_loading_last,
+            "  Last frame: queued: {}, started loading: {}, skipped loading: {}, finished loading: {}",
+            self.queued_last, self.started_loading_last, self.skipped_loading_last, self.finished_loading_last,
         );
     }
 }
@@ -275,9 +265,7 @@ impl<
         buffer_chunk_states: &[BufferChunkState; 3],
         load: &'static F,
     ) {
-        self.prequeued_last = queue.len();
         self.queued_last = 0;
-        self.skipped_queue_last = 0;
         self.started_loading_last = 0;
         self.skipped_loading_last = 0;
         self.finished_loading_last = 0;
@@ -313,33 +301,19 @@ impl<
 
         let editor_chunk_i = |pos| vgrid_index(start_tlc, grid_size, buffer_chunk_states, pos);
 
-        // Add newly passed chunks to load into the chunk loader prequeue
-        self.prequeue.extend(queue);
-
-        // If items in the prequeue are ready to be queued for loading (meaning all their data is available),
-        // then add them to the queue.
-        for i in (0..self.prequeue.len()).rev() {
-            if let Some(chunk_idx) = editor_chunk_i(self.prequeue[i].pos) {
-                match editor.chunks[chunk_idx].mark_invalid() {
-                    Ok(()) => {
-                        // All data is present & was able to mark chunk invalid, so add it to priority queue
-                        let prio = priority(self.prequeue[i].pos);
-                        self.queue.push(self.prequeue.remove(i), prio);
-                        self.queued_last += 1;
-                    }
-                    Err(()) => {}
-                }
-            } else {
-                self.prequeue.remove(i);
-                self.skipped_queue_last += 1;
-            }
+        // Add new items to queue
+        for item in queue {
+            let prio = priority(item.pos);
+            self.queue.push(item, prio);
+            self.queued_last += 1;
         }
 
         // Enqueue new chunks for loading until queue is empty or there are no thread slots left
         if !self.queue.is_empty() {
+            let mut requeue = vec![];
             for thread_slot in self.active_threads.iter_mut() {
                 if thread_slot.is_none() {
-                    let (item, _) = self.queue.pop().unwrap();
+                    let (item, prio) = self.queue.pop().unwrap();
                     let (sender, receiver) = sync_channel(0);
 
                     // Get index of current chunk. If this returns None, the chunk no longer is relevant
@@ -347,17 +321,28 @@ impl<
                     if let Some(chunk_idx) = editor_chunk_i(item.pos) {
                         let meta = editor.metadata().clone();
                         let chunk = &mut editor.chunks[chunk_idx];
-                        self.started_loading_last += 1;
-                        let mut chunk_data = chunk.take_data_for_loading();
-                        thread::spawn(|| {
-                            let sender = sender; // move
-                            load(&mut chunk_data, item, meta);
-                            sender.send(chunk_data).unwrap_or_else(|e| {
-                                panic!("Failed to send loaded chunk back to main thread: {}", e)
-                            });
-                        });
 
-                        *thread_slot = Some(receiver);
+                        match chunk.mark_invalid() {
+                            Ok(()) => {
+                                self.started_loading_last += 1;
+                                let mut chunk_data = chunk.take_data_for_loading();
+                                thread::spawn(|| {
+                                    let sender = sender; // move
+                                    load(&mut chunk_data, item, meta);
+                                    sender.send(chunk_data).unwrap_or_else(|e| {
+                                        panic!(
+                                            "Failed to send loaded chunk back to main thread: {}",
+                                            e
+                                        )
+                                    });
+                                });
+
+                                *thread_slot = Some(receiver);
+                            }
+                            Err(()) => {
+                                requeue.push((item, prio));
+                            }
+                        }
                     } else {
                         self.skipped_loading_last += 1;
                     }
@@ -366,6 +351,10 @@ impl<
                         break;
                     }
                 }
+            }
+
+            for (item, prio) in requeue {
+                self.queue.push(item, prio);
             }
         }
     }
