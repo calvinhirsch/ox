@@ -1,4 +1,4 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use derive_new::new;
 use crate::world::{TLCPos, TLCVector};
 use crate::world::loader::ChunkLoadQueueItem;
@@ -11,13 +11,13 @@ pub mod utils;
 pub mod voxel;
 
 
-#[derive(new, Clone, Debug)]
+#[derive(new, Clone)]
 pub struct PhysicalMemoryGridStruct<D, MD: MemoryGridMetadata> {
     pub data: D,
     pub metadata: MD,
 }
 
-#[derive(new, Clone, Debug)]
+#[derive(new, Clone)]
 pub struct VirtualMemoryGridStruct<C: Placeholder, MD: MemoryGridMetadata> {
     pub chunks: Vec<Option<C>>,
     pub metadata: MD
@@ -60,9 +60,7 @@ impl<C: Placeholder, MD: MemoryGridMetadata> VirtualMemoryGridStruct<C, MD> {
 }
 
 
-pub trait PhysicalMemoryGrid: Deref<Target = PhysicalMemoryGridStruct<Self::Data, Self::Metadata>>
-    + DerefMut<Target = PhysicalMemoryGridStruct<Self::Data, Self::Metadata>>
-    + Sized {
+pub trait PhysicalMemoryGrid: Deref<Target = PhysicalMemoryGridStruct<Self::Data, Self::Metadata>> + Sized {
     type Data;
     type Metadata: MemoryGridMetadata;
     type ChunkLoadQueueItemData: Clone + Send + 'static;

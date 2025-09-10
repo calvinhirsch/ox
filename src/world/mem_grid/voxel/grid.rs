@@ -1,11 +1,10 @@
-use std::fmt::Debug;
 use std::sync::Arc;
 use cgmath::{Array, EuclideanSpace, Vector3};
 use super::lod::{VirtualVoxelLOD, VirtualVoxelLODMetadata, VoxelLOD, VoxelLODChunkData, VoxelLODCreateParams};
 use crate::renderer::component::voxels::VoxelData;
 use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, Placeholder, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector, VoxelPos};
-use derive_more::{Deref, DerefMut};
+use derive_more::Deref;
 use hashbrown::{HashMap};
 use vulkano::memory::allocator::MemoryAllocator;
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
@@ -15,16 +14,16 @@ use crate::world::mem_grid::utils::{cubed, index_for_pos_in_tlc};
 use crate::world::mem_grid::voxel::ChunkVoxelIDs;
 
 
-#[derive(Deref, DerefMut)]
+#[derive(Deref)]
 pub struct VoxelMemoryGrid<VE: VoxelTypeEnum>(PhysicalMemoryGridStruct<VoxelMemoryGridData<VE>, VoxelMemoryGridMetadata>);
-
-pub type VirtualVoxelMemoryGrid<VE> = VirtualMemoryGridStruct<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata>;
+#[derive(Deref)]
+pub struct VirtualVoxelMemoryGrid<VE: VoxelTypeEnum>(VirtualMemoryGridStruct<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata>);
 
 pub struct VoxelMemoryGridData<VE: VoxelTypeEnum> {
     lods: Vec<Vec<Option<VoxelLOD<VE>>>>
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VoxelMemoryGridMetadata {
     size: usize,
     chunk_size: usize,
@@ -37,7 +36,7 @@ impl MemoryGridMetadata for VoxelMemoryGridMetadata {
     fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VirtualVoxelMemoryGridMetadata {
     this: VoxelMemoryGridMetadata,
     lods: Vec<Vec<Option<VirtualVoxelLODMetadata>>>
@@ -47,12 +46,12 @@ impl MemoryGridMetadata for VirtualVoxelMemoryGridMetadata {
     fn start_tlc(&self) -> TLCPos<i64> { self.this.start_tlc }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VoxelMemoryGridChunkData<VE: VoxelTypeEnum> {
     pub lods: Vec<Vec<Option<VoxelLODChunkData<VE>>>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VoxelChunkLoadingQueueItemData {
     pub lods: Vec<Vec<bool>>,
 }
@@ -60,8 +59,7 @@ pub struct VoxelChunkLoadingQueueItemData {
 
 impl<VE: VoxelTypeEnum> VoxelMemoryGrid<VE> {
     fn voxels_per_tlc(chunk_size: usize, n_lvls: usize, lvl: usize, lod: usize) -> usize {
-        let tlc_size = chunk_size.pow((n_lvls - lvl) as u32).to_le() >> lod;
-        cubed(tlc_size)
+        chunk_size.pow((n_lvls - lvl) as u32).to_le() >> (lod * 3)
     }
 
     pub fn new(
@@ -77,7 +75,7 @@ impl<VE: VoxelTypeEnum> VoxelMemoryGrid<VE> {
             .filter_map(|p| Some(p.as_ref()?.size))
             .max()
             .unwrap();
-        let n_lvls = lod_params.len() - 1;
+        let n_lvls = lod_params.len();
         let n_lods = lod_params.first().unwrap().len();
 
         let (grid_lods, lods) = lod_params
@@ -151,7 +149,7 @@ impl<VE: VoxelTypeEnum> VoxelMemoryGrid<VE> {
                                 ChunkLoadQueueItem {
                                     pos: item.pos,
                                     data: VoxelChunkLoadingQueueItemData {
-                                        lods: vec![vec![false; n_lods]; n_lvls+1],
+                                        lods: vec![vec![false; n_lods]; n_lvls],
                                     }
                                 }
                             );
@@ -197,7 +195,7 @@ impl<VE: VoxelTypeEnum> PhysicalMemoryGrid for VoxelMemoryGrid<VE> {
         panic!();
     }
 }
-impl<VE: VoxelTypeEnum + Debug> ToVirtual<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid<VE> {
+impl<VE: VoxelTypeEnum> ToVirtual<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> for VoxelMemoryGrid<VE> {
     fn to_virtual_for_size(self, grid_size: usize) -> VirtualMemoryGridStruct<VoxelMemoryGridChunkData<VE>, VirtualVoxelMemoryGridMetadata> {
         let (chunk_iters, metadata): (Vec<Vec<_>>, Vec<Vec<_>>) =
             self.0.data.lods.into_iter()
@@ -281,42 +279,16 @@ impl<VE: VoxelTypeEnum> FromVirtual<VoxelMemoryGridChunkData<VE>, VirtualVoxelMe
     }
 }
 
-struct LODSplitter<X, I: Iterator<Item = Option<X>>>(Vec<Vec<Option<I>>>);
+struct LODSplitter<I: Iterator>(Vec<Vec<Option<I>>>);
 
-impl<X, I: Iterator<Item = Option<X>>> Iterator for LODSplitter<X, I> {
+impl<I: Iterator> Iterator for LODSplitter<I> {
     type Item = Vec<Vec<I::Item>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let items: Vec<Vec<_>> = self.0
+        self.0
             .iter_mut()
-            .map(|iters|
-                iters.iter_mut().map(|iter_o|
-                    iter_o.as_mut().map(|iter| iter.next())
-                ).collect()
-            ).collect();
-
-        // If any iterators were Some but returned None element, we are done iterating
-        if items.iter().any(|items_lvl|
-             items_lvl.iter().any(|item|
-                matches!(item, Some(None))
-             )
-        ) {
-            None
-        }
-        else {
-            Some(
-                items.into_iter().map(|items|
-                    items.into_iter().map(|item|
-                        // Here there are three levels of None:
-                        // 1. If the iterator is None
-                        // 2. If the element is None (which should never be the case here)
-                        // 3. If the item I (i.e. Option<X>) is None
-                        // We will flatten these all to one Option
-                        item.and_then(|x| x.flatten())
-                    ).collect()
-                ).collect()
-            )
-        }
+            .map(|iters| iters.iter_mut().map(|iter| iter.as_mut()?.next()).collect())
+            .collect()
     }
 }
 

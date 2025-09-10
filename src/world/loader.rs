@@ -52,17 +52,19 @@ impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<
     }
 
     fn grid_index<_MD: MemoryGridMetadata>(
+        start_tlc: TLCPos<i64>,
         grid: &mut VirtualMemoryGridStruct<C, _MD>,
         pos: TLCPos<i64>,
     ) -> Option<usize> {
-        let pt = pos.0 - grid.start_tlc().0;
-        if pt.x >= grid.size() as i64 || pt.y >= grid.size() as i64 || pt.z >= grid.size() as i64 || pt.x < 0 || pt.y < 0 || pt.z < 0  {
+        let pt = pos.0 - start_tlc.0;
+        let max = Vector3::from_value(grid.size() as i64);
+        if pt.x >= max.x || pt.y >= max.y || pt.z >= max.z || pt.x < 0 || pt.y < 0 || pt.z < 0  {
             None
         }
         else {
             Some(
                 index_for_pos(
-                    (pos.0 - grid.start_tlc().0).cast::<usize>()?,
+                    (pos.0 - start_tlc.0).cast::<usize>()?,
                     grid.size()
                 )
             )
@@ -71,6 +73,7 @@ impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<
 
     pub fn sync<_MD: MemoryGridMetadata>(
         &mut self,
+        start_tlc: TLCPos<i64>,
         grid: &mut VirtualMemoryGridStruct<C, _MD>,
         queue: Vec<ChunkLoadQueueItem<QI>>
     ) {
@@ -80,7 +83,7 @@ impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<
             if if let Some(receiver) = thread_slot {
                 prev_active = i;
                 if let Ok((pos, chunk_data)) = receiver.try_recv() {
-                    if let Some(index) = ChunkLoader::grid_index(grid, pos) {
+                    if let Some(index) = ChunkLoader::grid_index(start_tlc, grid, pos) {
                         grid.chunks[index] = Some(chunk_data)
                     }
                     true
@@ -103,7 +106,7 @@ impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<
         // TODO: if an item's memory overlaps with one already in the queue then figure out what to do
         for item in queue {
             let priority = (99.99 - (Vector3::from_value(grid.size()/2).cast::<f32>().unwrap()
-                .distance((item.pos.0 - grid.start_tlc().0).cast::<f32>().unwrap())) * grid.size() as f32 / 50.) as u8;
+                .distance((item.pos.0 - start_tlc.0).cast::<f32>().unwrap())) * grid.size() as f32 / 50.) as u8;
             self.queue.push(
                 item,
                 priority,
@@ -117,7 +120,7 @@ impl<QI: Clone + Send + 'static, C: LoadChunk<QI> + Send + 'static> ChunkLoader<
                     let (item, priority) = self.queue.pop().unwrap();
                     let (sender, receiver) = sync_channel(0);
 
-                    let grid_index = ChunkLoader::grid_index(grid, item.pos)
+                    let grid_index = ChunkLoader::grid_index(start_tlc, grid, item.pos)
                         .expect("A chunk was queued for loading that is not in bounds of current grid.");
 
                     // Create a placeholder for this chunk and swap it into the grid so we can edit

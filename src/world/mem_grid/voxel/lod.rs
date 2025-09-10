@@ -8,7 +8,7 @@ use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxelIDs};
 use crate::world::mem_grid::{FromVirtual, MemoryGridMetadata, PhysicalMemoryGrid, PhysicalMemoryGridStruct, Placeholder, ToVirtual, VirtualMemoryGridStruct};
 use crate::world::{TLCPos, TLCVector};
 use std::sync::Arc;
-use derive_more::{Deref, DerefMut};
+use derive_more::Deref;
 use hashbrown::HashMap;
 use itertools::Itertools;
 use vulkano::command_buffer::BufferCopy;
@@ -23,11 +23,10 @@ pub struct VoxelLODCreateParams {
     pub voxel_type_ids_binding: Option<u32>,
 }
 
-#[derive(Deref, DerefMut)]
+#[derive(Deref)]
 pub struct VoxelLOD<VE: VoxelTypeEnum>(PhysicalMemoryGridStruct<VoxelLODData<VE>, VoxelLODMetadata>);
 pub type VirtualVoxelLOD<VE> = VirtualMemoryGridStruct<VoxelLODChunkData<VE>, VirtualVoxelLODMetadata>;
 
-#[derive(Clone, Debug)]
 pub struct VoxelLODData<VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     bitmask_layer: PhysicalMemoryGridLayer<Vec<VoxelBitmask>, ()>,
@@ -35,7 +34,7 @@ pub struct VoxelLODData<VE: VoxelTypeEnum> {
     updated_bitmask_regions_layer: PhysicalMemoryGridLayer<Vec<BufferCopy>, ()>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VoxelLODMetadata {
     size: usize,
     voxels_per_tlc: usize,
@@ -49,7 +48,7 @@ impl MemoryGridMetadata for VoxelLODMetadata {
     fn start_tlc(&self) -> TLCPos<i64> { self.start_tlc }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VirtualVoxelLODMetadata {
     this: VoxelLODMetadata,
     bitmask: MemoryGridLayerMetadata<()>,
@@ -61,7 +60,7 @@ impl MemoryGridMetadata for VirtualVoxelLODMetadata {
     fn start_tlc(&self) -> TLCPos<i64> { self.this.start_tlc() }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VoxelLODChunkData<VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     pub bitmask: MemoryGridLayerChunkData<ChunkBitmask>,

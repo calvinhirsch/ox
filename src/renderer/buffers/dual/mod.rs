@@ -106,8 +106,6 @@ impl<T: BufferContents> DualBuffer<[T]> {
         allocator: Arc<dyn MemoryAllocator>,
         is_uniform: bool,
     ) -> DualBuffer<[T]> {
-        debug_assert!(iter.len() > 0, "DualBuffer::from_iter expects an iterator with >0 length.");
-
         let staging = Buffer::from_iter(
             Arc::clone(&allocator),
             BufferCreateInfo {
