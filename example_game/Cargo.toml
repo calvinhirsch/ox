@@ -1,0 +1,22 @@
+[package]
+name = "ox_game"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cgmath = "0.18.0"
+derive-new = "0.6.0"
+derive_more = "0.99.17"
+enum-iterator = "1.4.1"
+hashbrown = "0.14.3"
+num = "0.4.1"
+num-derive = "0.4.1"
+num-traits = "0.2.17"
+vulkano = "0.34.1"
+vulkano-shaders = { version = "0.34.0", features = ["shaderc-debug"] }
+winit = "0.28.7"
+
+[dependencies.ox]
+path = "../ox"
