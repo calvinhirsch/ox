@@ -1,4 +1,5 @@
 use cgmath::Point3;
+use ox::ray::{cast_ray, CastRayResult, RayVoxelIntersect};
 use ox::renderer::component::camera::RendererCamera;
 use ox::renderer::component::materials::MaterialList;
 use ox::renderer::component::ubo::{RendererUBO, Ubo};
@@ -15,7 +16,7 @@ use ox::world::mem_grid::MemoryGrid;
 use ox::world::{
     camera::Camera,
     mem_grid::voxel::{VoxelLODCreateParams, VoxelMemoryGrid},
-    TLCPos, World,
+    TlcPos, World,
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +29,7 @@ use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::WriteDescriptorSet;
 use vulkano::memory::allocator::MemoryAllocator;
 use vulkano::sync::GpuFuture;
-use winit::event::{DeviceEvent, Event, KeyboardInput, WindowEvent};
+use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 
 mod blocks;
@@ -91,7 +92,7 @@ fn main() {
 
     let (renderer_context, window) = Context::new(&event_loop);
 
-    let start_tlc = TLCPos(Point3::<i64> { x: 0, y: 0, z: 0 });
+    let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 });
 
     let (voxel_mem_grid, renderer_voxel_data_component) = VoxelMemoryGrid::new(
         [
@@ -228,12 +229,15 @@ fn main() {
 
     world.queue_load_all(); // load all chunks in render distance
 
+    let largest_lod = world.mem_grid.voxel.metadata().largest_lod();
+
     // Event loop
 
     let mut last_render_time = Instant::now();
     let start_time = Instant::now();
     let mut window_resized = false;
     let mut camera_controller = WinitCameraController::new(CAMERA_SPEED, CAMERA_SENS);
+    let mut clicked = false;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -241,6 +245,15 @@ fn main() {
                 event: DeviceEvent::MouseMotion { delta },
                 ..
             } => camera_controller.process_mouse(delta.0, delta.1),
+            Event::DeviceEvent {
+                event: DeviceEvent::Button { button: _, state },
+                ..
+            } => match state {
+                ElementState::Pressed => {
+                    clicked = true;
+                }
+                _ => {}
+            },
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
@@ -280,8 +293,10 @@ fn main() {
                 dbg!(world.metadata().buffer_chunk_states());
                 world.move_camera(&mut camera_controller, dt); // can only be done before or after editing, not during
 
+                let camera_pos = world.camera().clone();
+
                 world.edit::<WorldChunkEditor<N_LODS>, _, _>(
-                    |editor| {
+                    |mut editor| {
                         println!(
                             "Valid chunks: {:.2}%",
                             editor
@@ -310,6 +325,27 @@ fn main() {
                         //         .voxel
                         //         .set_voxel(pos.voxel_index, Block::DIRT, &meta.voxel);
                         // }
+
+                        if clicked {
+                            let meta = editor.mem_grid.metadata().voxel.clone();
+                            match cast_ray(
+                                &mut editor.mem_grid,
+                                camera_pos.pos().to_owned(),
+                                camera_pos.viewport_center() - camera_pos.pos().0,
+                                CHUNK_SIZE,
+                                largest_lod.lvl(),
+                            ) {
+                                Ok(CastRayResult::Hit(RayVoxelIntersect { voxel, .. })) => {
+                                    editor
+                                        .mem_grid
+                                        .chunk_mut(voxel.tlc)
+                                        .unwrap()
+                                        .voxel
+                                        .set_voxel(voxel.voxel_index, Block::Air, &meta);
+                                }
+                                _ => {}
+                            }
+                        }
                     },
                     &load_chunk,
                 );
@@ -346,6 +382,8 @@ fn main() {
 
                 renderer.draw_frame();
                 world.chunk_loader().print_status();
+
+                clicked = false;
             }
             _ => (),
         }

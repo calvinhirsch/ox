@@ -1,16 +1,17 @@
 use crate::blocks::Block;
 use cgmath::{Array, Point3, Vector3};
 use hashbrown::HashMap;
+use ox::ray::ChunkEditorVoxels;
 use ox::world::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
 use ox::world::mem_grid::layer::MemoryGridLayer;
-use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLOD};
+use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::{
     BorrowedChunkVoxelEditor, ChunkVoxelEditor, VoxelChunkLoadQueueItemData,
     VoxelMemoryGridMetadata,
 };
 use ox::world::mem_grid::voxel::{ChunkVoxels, VoxelMemoryGrid};
 use ox::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
-use ox::world::{TLCPos, VoxelPos};
+use ox::world::{TlcPos, VoxelPos};
 
 pub const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
 
@@ -47,7 +48,7 @@ pub struct WorldChunkLoadQueueItemData<const N: usize> {
 impl<const N: usize> WorldMemoryGrid<N> {
     pub fn new(
         voxel_mem_grid: VoxelMemoryGrid<N>,
-        start_tlc: TLCPos<i64>,
+        start_tlc: TlcPos<i64>,
         entity_render_area_size: usize,
     ) -> Self {
         let vox_size = voxel_mem_grid.size();
@@ -58,7 +59,7 @@ impl<const N: usize> WorldMemoryGrid<N> {
                 (0..cubed(entity_grid_size))
                     .map(|_| LayerChunk::new(Entities { entities: vec![] }))
                     .collect(),
-                TLCPos(start_tlc.0 + Vector3::from_value((vox_size - entity_grid_size) as i64 / 2)),
+                TlcPos(start_tlc.0 + Vector3::from_value((vox_size - entity_grid_size) as i64 / 2)),
                 entity_grid_size,
                 (),
             ),
@@ -144,7 +145,7 @@ impl<const N: usize> MemoryGrid for WorldMemoryGrid<N> {
         self.voxel.size()
     }
 
-    fn start_tlc(&self) -> TLCPos<i64> {
+    fn start_tlc(&self) -> TlcPos<i64> {
         self.voxel.start_tlc()
     }
 }
@@ -159,6 +160,12 @@ pub struct WorldEditorMetadata {
 pub struct WorldChunkEditor<'a, const N: usize> {
     pub voxel: ChunkVoxelEditor<'a, Block, N>,
     pub entity: Option<&'a mut LayerChunk<Entities>>,
+}
+
+impl<'a, const N: usize> ChunkEditorVoxels<Block, N> for WorldChunkEditor<'a, N> {
+    fn voxels(&self) -> &ChunkVoxelEditor<'_, Block, N> {
+        &self.voxel
+    }
 }
 
 #[derive(Debug)]
@@ -274,7 +281,7 @@ pub fn load_chunk<const N: usize>(
 }
 
 fn generate_chunk(
-    chunk_pos: TLCPos<i64>,
+    chunk_pos: TlcPos<i64>,
     lvl: u8,
     sublvl: u8,
     voxel_ids_out: &mut ChunkVoxels,
@@ -286,7 +293,7 @@ fn generate_chunk(
     for x in 0..(tlc_size / voxel_size) as u32 {
         for y in 0..(tlc_size / voxel_size) as u32 {
             for z in 0..(tlc_size / voxel_size) as u32 {
-                let idx = VoxelPosInLOD {
+                let idx = VoxelPosInLod {
                     pos: Point3 { x, y, z },
                     lvl,
                     sublvl,
