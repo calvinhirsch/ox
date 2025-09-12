@@ -1,6 +1,6 @@
 use crate::world::mem_grid::utils::index_for_pos;
 use crate::world::mem_grid::MemoryGridEditor;
-use crate::world::{BufferChunkState, TLCPos};
+use crate::world::{BufferChunkState, TlcPos};
 use cgmath::{Array, EuclideanSpace, MetricSpace, Vector3};
 use getset::{CopyGetters, Getters};
 use priority_queue::PriorityQueue;
@@ -11,7 +11,7 @@ use std::thread;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ChunkLoadQueueItem<D> {
-    pub pos: TLCPos<i64>,
+    pub pos: TlcPos<i64>,
     pub data: D,
 }
 impl<D> Hash for ChunkLoadQueueItem<D> {
@@ -185,10 +185,10 @@ pub struct ChunkLoaderParams {
 }
 
 fn vgrid_index(
-    start_tlc: TLCPos<i64>,
+    start_tlc: TlcPos<i64>,
     grid_size: usize,
     buffer_chunk_states: &[BufferChunkState; 3],
-    pos: TLCPos<i64>,
+    pos: TlcPos<i64>,
 ) -> Option<usize> {
     let mut pt = pos.0 - start_tlc.0.to_vec();
 
@@ -259,7 +259,7 @@ impl<
         F: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
     >(
         &mut self,
-        start_tlc: TLCPos<i64>,
+        start_tlc: TlcPos<i64>,
         editor: &mut MemoryGridEditor<CE, MD>,
         queue: Vec<ChunkLoadQueueItem<QI>>,
         buffer_chunk_states: &[BufferChunkState; 3],
@@ -290,7 +290,7 @@ impl<
         }
 
         let grid_size = editor.size;
-        let priority = |chunk_pos: TLCPos<i64>| -> u32 {
+        let priority = |chunk_pos: TlcPos<i64>| -> u32 {
             u32::MAX
                 - (Vector3::from_value(grid_size as f32 / 2.)
                     .cast::<f32>()
@@ -395,7 +395,7 @@ mod tests {
     fn test_load_all_with_buffers() {
         let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
 
-        let start_tlc = TLCPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+        let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
         let mem_grid_size = 16;
         let mut mem_grid_editor = MemoryGridEditor::new(
             vec![TestChunkEditor(false); cubed(mem_grid_size)],
@@ -407,7 +407,7 @@ mod tests {
         for x in -7..=8 {
             for y in -7..=8 {
                 for z in -7..=8 {
-                    let pos = TLCPos(Point3 { x, y, z });
+                    let pos = TlcPos(Point3 { x, y, z });
                     loader.sync(
                         start_tlc,
                         &mut mem_grid_editor,
@@ -453,7 +453,7 @@ mod tests {
     fn test_load_all_without_buffers() {
         let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
 
-        let start_tlc = TLCPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+        let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
         let mem_grid_size = 16;
         let mut mem_grid_editor = MemoryGridEditor::new(
             vec![TestChunkEditor(false); cubed(mem_grid_size)],
@@ -465,7 +465,7 @@ mod tests {
         for x in -7..=7 {
             for y in -7..=7 {
                 for z in -7..=7 {
-                    let pos = TLCPos(Point3 { x, y, z });
+                    let pos = TlcPos(Point3 { x, y, z });
                     loader.sync(
                         start_tlc,
                         &mut mem_grid_editor,

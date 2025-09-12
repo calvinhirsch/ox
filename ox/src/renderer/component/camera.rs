@@ -68,16 +68,9 @@ impl CameraUBO {
         self.eye = (camera.position.0 - origin.0).try_into().unwrap();
 
         let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
-        let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
+        let (_, pitch_cos) = camera.pitch.sin_cos();
 
-        self.viewport_center = (camera.position.0 - origin.0
-            + Vector3 {
-                x: yaw_cos * pitch_cos * camera.viewport_dist,
-                y: -pitch_sin * camera.viewport_dist,
-                z: -yaw_sin * pitch_cos * camera.viewport_dist,
-            })
-        .try_into()
-        .unwrap();
+        self.viewport_center = camera.viewport_center().into();
 
         self.right_dir = Vector3 {
             x: -yaw_sin * viewport_half_dims.0,

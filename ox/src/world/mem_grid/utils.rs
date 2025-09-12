@@ -34,12 +34,12 @@ pub const fn pos_for_index(index: usize, size: usize) -> Point3<usize> {
 /// Position relative to bottom corner of current TLC in units of this LOD. For example,
 /// if LOD  lvl=0 and sublvl=2, pos_in_tlc should be in units 4x larger than highest
 /// fidelity voxels (i.e. 4 in world coords).
-pub struct VoxelPosInLOD {
+pub struct VoxelPosInLod {
     pub pos: Point3<u32>, // position in units of current LOD voxels
     pub lvl: u8,
     pub sublvl: u8,
 }
-impl VoxelPosInLOD {
+impl VoxelPosInLod {
     pub fn in_full_lod(pos: VoxelPos<u32>) -> Self {
         Self {
             pos: pos.0,

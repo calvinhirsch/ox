@@ -1,9 +1,9 @@
 use crate::world::VoxelPos;
-use cgmath::{Point3, Rad};
+use cgmath::{Angle, Point3, Rad, Vector3};
 
 pub mod controller;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Camera {
     pub position: VoxelPos<f32>, // position relative to the memory grid; 0,0,0 is the bottom corner of the memory grid
     pub yaw: Rad<f32>,           // radians
@@ -34,5 +34,18 @@ impl Camera {
 
     pub fn pos(&self) -> &VoxelPos<f32> {
         &self.position
+    }
+
+    pub fn viewport_center(&self) -> Point3<f32> {
+        let (yaw_sin, yaw_cos) = self.yaw.sin_cos();
+        let (pitch_sin, pitch_cos) = self.pitch.sin_cos();
+        (self.position.0
+            + Vector3 {
+                x: yaw_cos * pitch_cos * self.viewport_dist,
+                y: -pitch_sin * self.viewport_dist,
+                z: -yaw_sin * pitch_cos * self.viewport_dist,
+            })
+        .try_into()
+        .unwrap()
     }
 }

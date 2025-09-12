@@ -17,11 +17,11 @@ use camera::{controller::CameraController, Camera};
 
 /// Position in units of top level chunks
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TLCPos<T>(pub Point3<T>);
+pub struct TlcPos<T>(pub Point3<T>);
 
 /// Vector in units of top level chunks
 #[derive(Clone, Copy, Debug)]
-pub struct TLCVector<T>(pub Vector3<T>);
+pub struct TlcVector<T>(pub Vector3<T>);
 
 /// Position in units of 1 (i.e. LOD 0 voxels)
 #[derive(Clone, Copy, Debug)]

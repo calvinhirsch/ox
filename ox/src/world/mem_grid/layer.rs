@@ -1,7 +1,7 @@
 use crate::world::loader::{ChunkLoadQueueItem, LayerChunk};
 use crate::world::mem_grid::utils::{amod, cubed, index_for_pos, pos_for_index};
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
-use crate::world::{TLCPos, TLCVector};
+use crate::world::{TlcPos, TlcVector};
 use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use getset::{Getters, MutGetters};
 
@@ -10,11 +10,11 @@ use super::{ChunkEditor, MemGridShift};
 #[derive(Clone, Debug, Getters)]
 pub struct MemoryGridLayerMetadata<MD> {
     #[getset(get = "pub")]
-    start_tlc: TLCPos<i64>,
+    start_tlc: TlcPos<i64>,
     #[getset(get = "pub")]
     size: usize, // grid size (or render area size + 1)
     #[getset(get = "pub")]
-    offsets: TLCVector<usize>,
+    offsets: TlcVector<usize>,
     #[getset(get = "pub")]
     extra: MD,
 }
@@ -33,7 +33,7 @@ pub struct MemoryGridLayer<C, MD = ()> {
 impl<C, MD> MemoryGridLayer<C, MD> {
     pub fn new(
         chunks: Vec<LayerChunk<C>>,
-        start_tlc: TLCPos<i64>,
+        start_tlc: TlcPos<i64>,
         size: usize,
         extra_metadata: MD,
     ) -> Self {
@@ -43,42 +43,42 @@ impl<C, MD> MemoryGridLayer<C, MD> {
             metadata: MemoryGridLayerMetadata {
                 start_tlc,
                 size,
-                offsets: TLCVector(Self::calc_offsets(start_tlc, size)),
+                offsets: TlcVector(Self::calc_offsets(start_tlc, size)),
                 extra: extra_metadata,
             },
         }
     }
 
-    pub fn calc_offsets(start_tlc: TLCPos<i64>, size: usize) -> Vector3<usize> {
+    pub fn calc_offsets(start_tlc: TlcPos<i64>, size: usize) -> Vector3<usize> {
         amod(start_tlc.0, size).to_vec()
     }
 
     pub fn grid_pos_for_virtual_grid_pos(
         &self,
-        tlc_pos: TLCVector<usize>,
+        tlc_pos: TlcVector<usize>,
         vgrid_size: usize,
-    ) -> TLCVector<usize> {
+    ) -> TlcVector<usize> {
         let local_vgrid_pos = tlc_pos.0
             - Vector3::from_value(if vgrid_size > self.metadata.size {
                 (vgrid_size - (self.metadata.size - 1)) / 2
             } else {
                 0
             });
-        TLCVector((local_vgrid_pos + self.metadata.offsets.0) % self.metadata.size)
+        TlcVector((local_vgrid_pos + self.metadata.offsets.0) % self.metadata.size)
     }
 
     pub fn virtual_grid_pos_for_grid_pos(
         &self,
-        pos: TLCPos<u32>,
+        pos: TlcPos<u32>,
         vgrid_size: usize,
-    ) -> TLCPos<u32> {
+    ) -> TlcPos<u32> {
         let local_vgrid_pos = amod(
             pos.0.cast::<i64>().unwrap() - self.metadata.offsets.0.cast::<i64>().unwrap(),
             self.metadata.size,
         )
         .cast::<u32>()
         .unwrap();
-        TLCPos(
+        TlcPos(
             local_vgrid_pos
                 + Vector3::<u32>::from_value(if self.metadata.size < vgrid_size {
                     ((vgrid_size - self.metadata.size) / 2) as u32
@@ -102,7 +102,7 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
             .flat_map(|x| {
                 (0..size as i64 - 1).flat_map(move |y| {
                     (0..size as i64 - 1).map(move |z| ChunkLoadQueueItem {
-                        pos: TLCPos(start_tlc + Vector3 { x, y, z }),
+                        pos: TlcPos(start_tlc + Vector3 { x, y, z }),
                         data: (),
                     })
                 })
@@ -118,7 +118,7 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
         self.metadata.start_tlc.0 += shift.offset_delta().cast::<i64>().unwrap();
 
         // Apply the shift to grid offset
-        self.metadata.offsets = TLCVector(
+        self.metadata.offsets = TlcVector(
             amod(
                 Point3::from_vec(
                     self.metadata().offsets.0.cast::<i64>().unwrap()
@@ -138,7 +138,7 @@ impl<C, MD> MemoryGrid for MemoryGridLayer<C, MD> {
     fn size(&self) -> usize {
         self.metadata().size
     }
-    fn start_tlc(&self) -> TLCPos<i64> {
+    fn start_tlc(&self) -> TlcPos<i64> {
         self.metadata().start_tlc
     }
 }
@@ -193,7 +193,7 @@ fn edit_grid_layer_with_size<
     let vgrid_positions: Vec<_> = (0..cubed(mem_grid.metadata().size))
         .map(|i| {
             mem_grid.virtual_grid_pos_for_grid_pos(
-                TLCPos(
+                TlcPos(
                     pos_for_index(i, mem_grid.metadata().size)
                         .cast::<u32>()
                         .unwrap(),
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_edit_grid_layer_for_size() {
         let size = 4;
-        let start_tlc = TLCPos(Point3 { x: 0, y: 0, z: 0 });
+        let start_tlc = TlcPos(Point3 { x: 0, y: 0, z: 0 });
         let initial_chunks = (0..cubed(size)).map(|_| LayerChunk::new_valid(0)).collect();
         let mut layer = MemoryGridLayer::new(initial_chunks, start_tlc, size, ());
         {
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn test_edit_grid_layer() {
         let size = 16;
-        let start_tlc = TLCPos(Point3 { x: 0, y: 0, z: 0 });
+        let start_tlc = TlcPos(Point3 { x: 0, y: 0, z: 0 });
         let initial_chunks = (0..cubed(size)).map(|_| LayerChunk::new_valid(0)).collect();
         let mut layer = MemoryGridLayer::new(initial_chunks, start_tlc, size, ());
         {

@@ -631,6 +631,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                     bool b_ib = ipos.y > min_pt.y && ipos.y < max_pt.y; // is b still in bounds
                     bool c_ib = ipos.z > min_pt.z && ipos.z < max_pt.z; // is c still in bounds
 
+                    // warning: this variable is used in a non-obvious way (see later use of it for details)
                     bool b_first;
 
                     // Check first possible voxel location, in the case where we cross all three axes, the first voxel
@@ -661,8 +662,8 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                         b_first = true;
                     }
 
-                    // If we went out of bounds in either b axis or c axiz, set ray pos to where it crossed and break
-                    if (!b_ib && (c_ib || !c_crossed || b_first)) {
+                    // If we went out of bounds in either b axis or c axis, break
+                    if (!b_ib && (c_ib || b_first)) {
                         crossed_ax_abc = 1;
                         break;
                     }

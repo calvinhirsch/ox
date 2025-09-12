@@ -7,10 +7,10 @@ use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::{
     BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunkState,
 };
-use crate::world::mem_grid::utils::{cubed, ChunkSize, IteratorWithIndexing, VoxelPosInLOD};
+use crate::world::mem_grid::utils::{cubed, ChunkSize, IteratorWithIndexing, VoxelPosInLod};
 use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxels;
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
-use crate::world::{TLCPos, VoxelPos};
+use crate::world::{TlcPos, VoxelPos};
 use cgmath::{Array, EuclideanSpace, Vector3};
 use getset::{CopyGetters, Getters};
 use hashbrown::{HashMap, HashSet};
@@ -76,7 +76,7 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         lod_params: [VoxelLODCreateParams; N],
         memory_allocator: Arc<dyn MemoryAllocator>,
         chunk_size: ChunkSize,
-        start_tlc: TLCPos<i64>,
+        start_tlc: TlcPos<i64>,
     ) -> (Self, VoxelData<N>) {
         for p in lod_params.iter() {
             p.validate(chunk_size);
@@ -103,7 +103,7 @@ impl<const N: usize> VoxelMemoryGrid<N> {
 
         let (grid_lods, lods) = unzip_array_of_tuple(lod_params.map(|params| {
             let lod_tlc_size = lod_tlc_size(chunk_size, largest_lvl, params.lvl, params.sublvl);
-            let start_tlc = TLCPos(
+            let start_tlc = TlcPos(
                 start_tlc.0 + Vector3::from_value(((size - params.render_area_size) / 2) as i64),
             );
             VoxelMemoryGridLOD::new_voxel_lod(
@@ -188,13 +188,14 @@ impl<const N: usize> MemoryGrid for VoxelMemoryGrid<N> {
         self.largest_lod().size()
     }
 
-    fn start_tlc(&self) -> TLCPos<i64> {
+    fn start_tlc(&self) -> TlcPos<i64> {
         self.largest_lod().start_tlc()
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Getters)]
 pub struct ChunkVoxelEditor<'a, VE: VoxelTypeEnum, const N: usize> {
+    #[getset(get = "pub")]
     lods: [Option<VoxelLODChunkEditor<'a, VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
@@ -284,7 +285,7 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
         meta: &VoxelMemoryGridMetadata,
     ) {
         self.set_voxel(
-            VoxelPosInLOD::in_full_lod(pos).index(meta.chunk_size, meta.largest_lod.lvl),
+            VoxelPosInLod::in_full_lod(pos).index(meta.chunk_size, meta.largest_lod.lvl),
             voxel_typ,
             meta,
         );
@@ -341,9 +342,9 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
     /// Unsafe because it will access the chunk's data when it is in "missing" state.
     /// Presumably, this function is being called in a chunk loading thread having borrowed
     /// the chunk data.
-    pub unsafe fn load_new<F: Fn(TLCPos<i64>, u8, u8, &mut ChunkVoxels, usize, u8)>(
+    pub unsafe fn load_new<F: Fn(TlcPos<i64>, u8, u8, &mut ChunkVoxels, usize, u8)>(
         &mut self,
-        pos: TLCPos<i64>,
+        pos: TlcPos<i64>,
         lods_to_load: [bool; N],
         gen_func: F,
         chunk_size: ChunkSize,
@@ -464,7 +465,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalVoxelPos {
-    pub tlc: TLCPos<i64>,
+    pub tlc: TlcPos<i64>,
     pub voxel_index: usize,
 }
 impl GlobalVoxelPos {
@@ -476,8 +477,8 @@ impl GlobalVoxelPos {
             .unwrap();
 
         GlobalVoxelPos {
-            tlc: TLCPos(global_tlc),
-            voxel_index: VoxelPosInLOD::in_full_lod(VoxelPos(pos_in_tlc))
+            tlc: TlcPos(global_tlc),
+            voxel_index: VoxelPosInLod::in_full_lod(VoxelPos(pos_in_tlc))
                 .index(chunk_size, largest_chunk_lvl),
         }
     }
@@ -536,7 +537,7 @@ mod tests {
     #[test]
     fn test_edit_voxel_grid() {
         let renderer_context = TestContext::new();
-        let start_tlc = TLCPos(Point3::<i64> {
+        let start_tlc = TlcPos(Point3::<i64> {
             x: -6,
             y: -6,
             z: -6,

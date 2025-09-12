@@ -1,10 +1,10 @@
 use std::ops::Range;
 
-use crate::world::loader::ChunkLoadQueueItem;
 use crate::world::mem_grid::utils::index_for_pos;
 use crate::world::mem_grid::voxel::grid::GlobalVoxelPos;
-use crate::world::TLCPos;
-use cgmath::{EuclideanSpace, Point3, Vector3};
+use crate::world::TlcPos;
+use crate::world::{loader::ChunkLoadQueueItem, TlcVector};
+use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use derive_new::new;
 use getset::{CopyGetters, Getters};
 
@@ -17,15 +17,15 @@ pub mod voxel;
 pub struct MemoryGridEditor<CE, MD> {
     pub chunks: Vec<CE>,
     pub size: usize, // grid size (or render area size + 1)
-    pub start_tlc: TLCPos<i64>,
+    pub start_tlc: TlcPos<i64>,
     #[get = "pub"]
     metadata: MD,
 }
 
 impl<CE, MD> MemoryGridEditor<CE, MD> {
     pub fn chunk_index_in(
-        global_tlc_pos: TLCPos<i64>,
-        grid_start_tlc: TLCPos<i64>,
+        global_tlc_pos: TlcPos<i64>,
+        grid_start_tlc: TlcPos<i64>,
         grid_size: usize, // (or render area size + 1)
     ) -> Option<usize> {
         Some(index_for_pos(
@@ -34,21 +34,38 @@ impl<CE, MD> MemoryGridEditor<CE, MD> {
         ))
     }
 
-    pub fn chunk_index(&self, global_tlc_pos: TLCPos<i64>) -> Option<usize> {
+    pub fn chunk_index(&self, global_tlc_pos: TlcPos<i64>) -> Option<usize> {
         Self::chunk_index_in(global_tlc_pos, self.start_tlc, self.size)
     }
 
-    pub fn chunk(&self, global_pos: GlobalVoxelPos) -> Result<&CE, ()> {
-        let idx = self.chunk_index(global_pos.tlc).ok_or(())?;
-        Ok(self.chunks.get(idx).unwrap())
+    pub fn chunk(&self, global_tlc_pos: TlcPos<i64>) -> Result<&CE, ()> {
+        let idx = self.chunk_index(global_tlc_pos).ok_or(())?;
+        Ok(self.chunks.get(idx).expect(&format!(
+            "Internal error fetching chunk {:?}",
+            global_tlc_pos
+        )))
     }
 
-    pub fn chunk_mut(&mut self, global_pos: GlobalVoxelPos) -> Result<&mut CE, ()> {
-        let idx = self.chunk_index(global_pos.tlc).ok_or(())?;
-        Ok(self
-            .chunks
-            .get_mut(idx)
-            .expect(&format!("Internal error fetching chunk {:?}", global_pos)))
+    pub fn chunk_mut(&mut self, global_tlc_pos: TlcPos<i64>) -> Result<&mut CE, ()> {
+        let idx = self.chunk_index(global_tlc_pos).ok_or(())?;
+        Ok(self.chunks.get_mut(idx).expect(&format!(
+            "Internal error fetching chunk {:?}",
+            global_tlc_pos
+        )))
+    }
+
+    pub fn center_chunk_pos(&self) -> TlcPos<i64> {
+        TlcPos(self.start_tlc.0 + Vector3::from_value(self.size as i64 / 2 - 1))
+    }
+
+    pub fn center_chunk(&self) -> &CE {
+        let idx = index_for_pos(Point3::from_value(self.size as u32 / 2 - 1), self.size);
+        &self.chunks[idx]
+    }
+
+    pub fn center_chunk_mut(&self) -> &CE {
+        let idx = index_for_pos(Point3::from_value(self.size as u32 / 2 - 1), self.size);
+        &self.chunks[idx]
     }
 }
 
@@ -149,12 +166,12 @@ impl ShiftGridAxis {
     }
 }
 
-fn abc_pos<T: Into<i64>>(av: T, bv: T, cv: T, a: usize, b: usize, c: usize) -> TLCPos<i64> {
+fn abc_pos<T: Into<i64>>(av: T, bv: T, cv: T, a: usize, b: usize, c: usize) -> TlcPos<i64> {
     let mut chunk = Point3::<i64> { x: 0, y: 0, z: 0 };
     chunk[a] = av.into();
     chunk[b] = bv.into();
     chunk[c] = cv.into();
-    TLCPos(chunk)
+    TlcPos(chunk)
 }
 
 pub struct MemGridShift([ShiftGridAxis; 3]);
@@ -182,10 +199,10 @@ impl MemGridShift {
         }
     }
 
-    pub fn collect_chunks_to_load<O, F: Fn(TLCPos<i64>) -> O>(
+    pub fn collect_chunks_to_load<O, F: Fn(TlcPos<i64>) -> O>(
         &self,
         mem_grid_size: usize,
-        start_tlc: TLCPos<i64>,
+        start_tlc: TlcPos<i64>,
         f: F,
     ) -> Vec<O> {
         // ENHANCEMENT: Do this without all the collect()s in the middle, causes closure escape problems though
@@ -217,7 +234,7 @@ impl MemGridShift {
                                         )
                                         .into_iter()
                                         .map(|cv| {
-                                            f(TLCPos(
+                                            f(TlcPos(
                                                 abc_pos(av, bv as i32, cv as i32, a, b, c).0
                                                     + start_tlc.0.to_vec(),
                                             ))
@@ -248,7 +265,7 @@ pub trait MemoryGrid {
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
     /// Size including any buffer chunks
     fn size(&self) -> usize;
-    fn start_tlc(&self) -> TLCPos<i64>;
+    fn start_tlc(&self) -> TlcPos<i64>;
 }
 
 pub trait MemoryGridEditorChunk<'a, MG: MemoryGrid, MD>: Sized {

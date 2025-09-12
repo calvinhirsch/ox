@@ -8,11 +8,11 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use ox::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use ox::renderer::component::voxels::lod::{VoxelIDUpdate, VoxelLODUpdate};
 use ox::voxel_type::{Material, VoxelTypeDefinition, VoxelTypeEnum};
-use ox::world::mem_grid::utils::{cubed, squared, VoxelPosInLOD};
+use ox::world::mem_grid::utils::{cubed, squared, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::ChunkVoxelEditor;
 use ox::world::mem_grid::voxel::{VoxelLODCreateParams, VoxelMemoryGrid};
 use ox::world::mem_grid::{MemoryGrid, MemoryGridEditorChunk};
-use ox::world::TLCPos;
+use ox::world::TlcPos;
 use ox::{
     renderer::test_context::TestContext,
     world::{
@@ -80,7 +80,7 @@ fn fill_chunk<const N: usize, VE: VoxelTypeEnum>(
                 for x in 0..(tlc_size / voxel_size) as u32 {
                     for y in 0..(tlc_size / voxel_size) as u32 {
                         for z in 0..(tlc_size / voxel_size) as u32 {
-                            let idx = VoxelPosInLOD {
+                            let idx = VoxelPosInLod {
                                 pos: Point3 { x, y, z },
                                 lvl,
                                 sublvl,
@@ -162,7 +162,7 @@ fn assert_updates_eq(u1: Vec<VoxelLODUpdate>, u2: Vec<VoxelLODUpdate>) {
 #[test]
 fn test_queue_load_all() {
     let renderer_context = TestContext::new();
-    let start_tlc = TLCPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+    let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
     let (mut grid, _) = VoxelMemoryGrid::new(
         [
             VoxelLODCreateParams {
@@ -217,7 +217,7 @@ fn test_queue_load_all() {
             .flat_map(|x| {
                 (-7..=7).into_iter().flat_map(move |y| {
                     (-7..=7).into_iter().map(move |z| ChunkLoadQueueItem {
-                        pos: TLCPos(Point3 { x, y, z }),
+                        pos: TlcPos(Point3 { x, y, z }),
                         data: VoxelChunkLoadQueueItemData {
                             lods: [false, false, false, true, true],
                         },
@@ -230,18 +230,18 @@ fn test_queue_load_all() {
         for x in -3..=3 {
             for y in -3..=3 {
                 for z in -3..=3 {
-                    q.get_mut(&TLCPos(Point3 { x, y, z })).unwrap().data.lods[2] = true;
+                    q.get_mut(&TlcPos(Point3 { x, y, z })).unwrap().data.lods[2] = true;
                 }
             }
         }
         for x in -1..=1 {
             for y in -1..=1 {
                 for z in -1..=1 {
-                    q.get_mut(&TLCPos(Point3 { x, y, z })).unwrap().data.lods[1] = true;
+                    q.get_mut(&TlcPos(Point3 { x, y, z })).unwrap().data.lods[1] = true;
                 }
             }
         }
-        q.get_mut(&TLCPos(Point3 { x: 0, y: 0, z: 0 }))
+        q.get_mut(&TlcPos(Point3 { x: 0, y: 0, z: 0 }))
             .unwrap()
             .data
             .lods[0] = true;

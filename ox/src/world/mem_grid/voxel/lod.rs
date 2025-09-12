@@ -4,10 +4,10 @@ use crate::renderer::component::voxels::lod::{VoxelIDUpdate, VoxelLODUpdate};
 use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::LayerChunk;
 use crate::world::mem_grid::layer::{MemoryGridLayer, MemoryGridLayerMetadata};
-use crate::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLOD};
+use crate::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkUpdateRegions, ChunkVoxels};
 use crate::world::mem_grid::ChunkEditor;
-use crate::world::TLCPos;
+use crate::world::TlcPos;
 use cgmath::Point3;
 use getset::{CopyGetters, Getters, MutGetters};
 use hashbrown::HashMap;
@@ -58,7 +58,7 @@ pub type VoxelMemoryGridLOD = MemoryGridLayer<LODLayerData, LODMetadata>;
 impl VoxelMemoryGridLOD {
     pub fn new_voxel_lod(
         params: VoxelLODCreateParams,
-        start_tlc: TLCPos<i64>,
+        start_tlc: TlcPos<i64>,
         lod_tlc_size: usize,
         buffer_allocator: Arc<dyn MemoryAllocator>,
     ) -> (Self, RendererVoxelLOD) {
@@ -279,7 +279,7 @@ impl LODLayerData {
 
     pub fn update_bitmask_bit_from_lower_lod(
         &mut self,
-        voxel_pos: VoxelPosInLOD,
+        voxel_pos: VoxelPosInLod,
         voxel_index: usize,
         lower_lod: &LODLayerData,
         lower_lvl: u8,
@@ -330,7 +330,7 @@ impl<'a> LODLayerDataWithVoxelIDs<'a> {
     }
 }
 
-pub fn apply_to_voxels_in_lod<F: FnMut(VoxelPosInLOD)>(
+pub fn apply_to_voxels_in_lod<F: FnMut(VoxelPosInLod)>(
     lvl: u8,
     sublvl: u8,
     chunk_size: ChunkSize,
@@ -341,7 +341,7 @@ pub fn apply_to_voxels_in_lod<F: FnMut(VoxelPosInLOD)>(
     for y in 0..curr_lod_tlc_size {
         for z in 0..curr_lod_tlc_size {
             for x in 0..curr_lod_tlc_size {
-                f(VoxelPosInLOD {
+                f(VoxelPosInLod {
                     pos: Point3 { x, y, z },
                     lvl,
                     sublvl,
@@ -492,7 +492,7 @@ pub fn calc_full_bitmask<VE: VoxelTypeEnum>(voxels: &ChunkVoxels, bitmask: &mut 
 /// Given a current lvl/sublvl and a lower lvl/sublvl, find all the voxels in the lower LOD that make
 /// up the voxel at `index`/`pt` in the current LOD and return an iterator over their indices.
 fn apply_to_voxel_indices_in_lower_lod<F: FnMut(usize)>(
-    voxel: VoxelPosInLOD,
+    voxel: VoxelPosInLod,
     voxel_index: usize,
     lower_lvl: u8,
     lower_sublvl: u8,
@@ -513,7 +513,7 @@ fn apply_to_voxel_indices_in_lower_lod<F: FnMut(usize)>(
 
         let scale_relative_to_target_sublvl = 1u32 << (voxel.sublvl - target_sublvl);
         let pos_in_target = voxel.pos * scale_relative_to_target_sublvl; // botleft pos in target sublvl
-        let start_idx_in_target = VoxelPosInLOD {
+        let start_idx_in_target = VoxelPosInLod {
             pos: pos_in_target,
             lvl: voxel.lvl,
             sublvl: target_sublvl,
