@@ -12,7 +12,12 @@ use ox::renderer::Renderer;
 use ox::voxel_type::VoxelTypeEnum;
 use ox::world::camera::controller::winit::WinitCameraController;
 use ox::world::loader::{ChunkLoader, ChunkLoaderParams};
+use ox::world::mem_grid::utils::VoxelPosInLod;
+use ox::world::mem_grid::voxel::grid::{
+    global_voxel_pos_from_pos_in_tlc, voxel_pos_in_tlc_from_global_pos,
+};
 use ox::world::mem_grid::MemoryGrid;
+use ox::world::VoxelPos;
 use ox::world::{
     camera::Camera,
     mem_grid::voxel::{VoxelLODCreateParams, VoxelMemoryGrid},
@@ -237,7 +242,8 @@ fn main() {
     let start_time = Instant::now();
     let mut window_resized = false;
     let mut camera_controller = WinitCameraController::new(CAMERA_SPEED, CAMERA_SENS);
-    let mut clicked = false;
+    let mut left_clicked = false;
+    let mut right_clicked = false;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -246,11 +252,20 @@ fn main() {
                 ..
             } => camera_controller.process_mouse(delta.0, delta.1),
             Event::DeviceEvent {
-                event: DeviceEvent::Button { button: _, state },
+                event: DeviceEvent::Button { button, state },
                 ..
             } => match state {
                 ElementState::Pressed => {
-                    clicked = true;
+                    dbg!(button);
+                    match button {
+                        1 => {
+                            left_clicked = true;
+                        }
+                        3 => {
+                            right_clicked = true;
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             },
@@ -326,7 +341,7 @@ fn main() {
                         //         .set_voxel(pos.voxel_index, Block::DIRT, &meta.voxel);
                         // }
 
-                        if clicked {
+                        if left_clicked || right_clicked {
                             let meta = editor.mem_grid.metadata().voxel.clone();
                             match cast_ray(
                                 &mut editor.mem_grid,
@@ -339,15 +354,48 @@ fn main() {
                                     pos,
                                     index,
                                     tlc,
-                                    ..
+                                    face,
                                 })) => {
                                     dbg!(pos, index, tlc);
-                                    let _ = editor
-                                        .mem_grid
-                                        .chunk_mut(tlc)
-                                        .unwrap()
-                                        .voxel
-                                        .set_voxel(pos, index, Block::Air, &meta);
+                                    if left_clicked {
+                                        let _ = editor
+                                            .mem_grid
+                                            .chunk_mut(tlc)
+                                            .unwrap()
+                                            .voxel
+                                            .set_voxel(pos, index, Block::Air, &meta);
+                                    }
+                                    if right_clicked {
+                                        let global_pos = global_voxel_pos_from_pos_in_tlc(
+                                            tlc,
+                                            pos,
+                                            meta.chunk_size(),
+                                            meta.largest_lod().lvl(),
+                                        )
+                                        .0 + face.delta().0.map(|a| a as i64);
+                                        let (new_tlc, new_pos) = voxel_pos_in_tlc_from_global_pos(
+                                            VoxelPos(global_pos),
+                                            meta.chunk_size(),
+                                            meta.largest_lod().lvl(),
+                                        );
+
+                                        // make sure this TLC has LOD 0
+                                        let v =
+                                            &mut editor.mem_grid.chunk_mut(new_tlc).unwrap().voxel;
+                                        if v.lods()[0].is_some() {
+                                            let _ = v.set_voxel(
+                                                new_pos,
+                                                VoxelPosInLod {
+                                                    pos: new_pos.0,
+                                                    lvl: 0,
+                                                    sublvl: 0,
+                                                }
+                                                .index(meta.chunk_size(), meta.largest_lod().lvl()),
+                                                Block::Metal,
+                                                &meta,
+                                            );
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
@@ -389,7 +437,8 @@ fn main() {
                 renderer.draw_frame();
                 world.chunk_loader().print_status();
 
-                clicked = false;
+                left_clicked = false;
+                right_clicked = false;
             }
             _ => (),
         }

@@ -9,7 +9,7 @@ use crate::{
             voxel::grid::ChunkVoxelEditor,
             MemoryGridEditor,
         },
-        TlcPos, VoxelPos,
+        TlcPos, VoxelPos, VoxelVector,
     },
 };
 
@@ -20,6 +20,15 @@ pub trait ChunkEditorVoxels<VE: VoxelTypeEnum, const N: usize> {
 pub struct VoxelFace {
     pub ax: u8,    // 0, 1, or 2
     pub dir: bool, // true for positive, false for negative
+}
+
+impl VoxelFace {
+    /// Get delta position to the voxel this face faces
+    pub fn delta(&self) -> VoxelVector<i32> {
+        let mut v = Vector3::from_value(0);
+        v[self.ax as usize] = (self.dir as i32) * 2 - 1;
+        VoxelVector(v)
+    }
 }
 
 pub struct RayVoxelIntersect {
@@ -161,8 +170,8 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
             pos: VoxelPos(ipos_xyz(ipos).cast::<u32>().unwrap()),
             index: voxel_index,
             face: VoxelFace {
-                ax: crossed_ax_abc as u8,
-                dir: ray_dir[crossed_ax] < 0.0,
+                ax: [ax_a, ax_b, ax_c][crossed_ax_abc] as u8,
+                dir: ray_dir[crossed_ax_abc] < 0.0,
             },
         }))
     };

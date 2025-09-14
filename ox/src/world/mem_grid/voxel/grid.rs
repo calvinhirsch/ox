@@ -510,6 +510,16 @@ pub fn voxel_pos_in_tlc_from_global_pos(
     )
 }
 
+pub fn global_voxel_pos_from_pos_in_tlc(
+    tlc: TlcPos<i64>,
+    pos: VoxelPos<u32>,
+    chunk_size: ChunkSize,
+    largest_chunk_lvl: u8,
+) -> VoxelPos<i64> {
+    let tlc_size = chunk_size.size().pow(largest_chunk_lvl as u32) as i64;
+    VoxelPos(tlc.0 * tlc_size + pos.0.map(|a| a as i64).to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
