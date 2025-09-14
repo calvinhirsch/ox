@@ -6,7 +6,7 @@ use crate::{
     world::{
         mem_grid::{
             utils::{ChunkSize, VoxelPosInLod},
-            voxel::grid::{ChunkVoxelEditor, GlobalVoxelPos},
+            voxel::grid::ChunkVoxelEditor,
             MemoryGridEditor,
         },
         TlcPos, VoxelPos,
@@ -23,7 +23,9 @@ pub struct VoxelFace {
 }
 
 pub struct RayVoxelIntersect {
-    pub voxel: GlobalVoxelPos,
+    pub tlc: TlcPos<i64>,
+    pub pos: VoxelPos<u32>,
+    pub index: usize,
     pub face: VoxelFace,
 }
 
@@ -64,6 +66,7 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
 
     dbg!(tlc);
     dbg!(pos);
+    dbg!(ipos);
 
     // ENHANCEMENT: a bunch of this gets repeated when called from cast_ray
 
@@ -122,29 +125,12 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
 
     // helpers
 
-    let vox_idx = |ipos: &Point3<i32>| {
-        dbg!("ipos to check", &ipos);
-        VoxelPosInLod::in_full_lod(VoxelPos(ipos.cast::<u32>().unwrap()))
-            .index(chunk_size, largest_chunk_lvl)
-    };
-    let hit = |tlc, voxel_index, crossed_ax_abc| {
-        Ok(CastRayInTlcResult::Hit(RayVoxelIntersect {
-            voxel: GlobalVoxelPos {
-                tlc: tlc,
-                voxel_index,
-            },
-            face: VoxelFace {
-                ax: crossed_ax_abc as u8,
-                dir: ray_dir[crossed_ax] < 0.0,
-            },
-        }))
-    };
-
     let step_ray = |ipos: &mut Point3<i32>, pos: &mut Point3<f32>| {
         ipos.x += a_dir;
         pos.add_assign(ray_dir);
         ipos.y = pos.y.floor() as i32;
         ipos.z = pos.z.floor() as i32;
+        dbg!("step");
     };
 
     let pos_xyz = |pos_abc: Point3<f32>| {
@@ -163,11 +149,34 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
         r
     };
 
+    let vox_idx = |ipos: Point3<i32>| {
+        dbg!("ipos to check", &ipos);
+        VoxelPosInLod::in_full_lod(VoxelPos(ipos_xyz(ipos).cast::<u32>().unwrap()))
+            .index(chunk_size, largest_chunk_lvl)
+    };
+
+    let hit = |tlc, voxel_index, crossed_ax_abc, ipos: Point3<i32>| {
+        Ok(CastRayInTlcResult::Hit(RayVoxelIntersect {
+            tlc: tlc,
+            pos: VoxelPos(ipos_xyz(ipos).cast::<u32>().unwrap()),
+            index: voxel_index,
+            face: VoxelFace {
+                ax: crossed_ax_abc as u8,
+                dir: ray_dir[crossed_ax] < 0.0,
+            },
+        }))
+    };
+
     // Check if the block we are starting in got hit
 
-    let starting_block_idx = vox_idx(&ipos);
-    if chunk_voxels[starting_block_idx] != VE::empty() {
-        return hit(tlc, starting_block_idx, [ax_a, ax_b, ax_c][crossed_ax]);
+    let starting_block_idx = vox_idx(ipos);
+    if chunk_voxels[starting_block_idx] != VE::empty().id() {
+        return hit(
+            tlc,
+            starting_block_idx,
+            [ax_a, ax_b, ax_c][crossed_ax],
+            ipos,
+        );
     }
 
     // Find a step magnitude that will snap pos to the desired integer a value (ipos.x)
@@ -225,9 +234,9 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
                                 0
                             },
                         };
-                    let idx = vox_idx(&ipos_to_check);
-                    if chunk_voxels[idx] != VE::empty() {
-                        return hit(tlc, idx, if b_first { ax_b } else { ax_c });
+                    let idx = vox_idx(ipos_to_check);
+                    if chunk_voxels[idx] != VE::empty().id() {
+                        return hit(tlc, idx, if b_first { ax_b } else { ax_c }, ipos_to_check);
                     }
                 }
                 b_first
@@ -239,39 +248,41 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
         };
 
         // If we went out of bounds in either b axis or c axis, break
-        if !b_ib && (c_ib || b_first) {
+        let mut oob_b_or_c = |ax_xyz: usize, ax_abc: usize| {
             let mut new_tlc = tlc;
-            if ray_dir.y > 0.0 {
-                new_tlc.0[ax_b] += 1;
-                pos[ax_b] = 0.0;
-                ipos[ax_b] = 0;
+            ipos.x -= a_dir;
+            if ray_dir[ax_abc] > 0.0 {
+                new_tlc.0[ax_xyz] += 1;
+                // pos[ax_abc] = 0.0;
+                // ipos[ax_abc] = 0;
             } else {
-                new_tlc.0[ax_b] -= 1;
-                pos[ax_b] = tlc_size as f32;
-                ipos[ax_b] = tlc_size - 1;
+                new_tlc.0[ax_xyz] -= 1;
+                // pos[ax_abc] = tlc_size as f32;
+                // ipos[ax_abc] = tlc_size - 1;
             }
-            return Ok(CastRayInTlcResult::Miss(RayPos {
-                tlc,
+
+            // Our position is going to be at the next round value in A axis, but
+            // we want it to be at the point we crossed the axis that went OOB
+            let target_pos = if ray_dir[ax_abc] > 0.0 { tlc_size } else { 0 };
+            let delta = (target_pos as f32 - pos[ax_abc]) / (ray_dir[ax_abc] + f32::EPSILON);
+            pos += ray_dir * delta;
+            pos[ax_abc] = target_pos as f32;
+            ipos = pos.map(|a| a.floor() as i32);
+            ipos[ax_abc] = target_pos;
+
+            dbg!("oob", ax_abc);
+
+            Ok(CastRayInTlcResult::Miss(RayPos {
+                tlc: new_tlc,
                 pos: pos_xyz(pos),
                 ipos: ipos_xyz(ipos),
-            }));
+            }))
+        };
+        if !b_ib && (c_ib || b_first) {
+            return oob_b_or_c(ax_b, 1);
         }
         if !c_ib {
-            let mut new_tlc = tlc;
-            if ray_dir.y > 0.0 {
-                new_tlc.0[ax_c] += 1;
-                pos[ax_c] = 0.0;
-                ipos[ax_c] = 0;
-            } else {
-                new_tlc.0[ax_c] -= 1;
-                pos[ax_c] = tlc_size as f32;
-                ipos[ax_c] = tlc_size - 1;
-            }
-            return Ok(CastRayInTlcResult::Miss(RayPos {
-                tlc,
-                pos: pos_xyz(pos),
-                ipos: ipos_xyz(ipos),
-            }));
+            return oob_b_or_c(ax_c, 2);
         }
 
         // Check second possible voxel location, in the case where we cross two or three axes, the voxel
@@ -283,19 +294,19 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
                     y: 0,
                     z: 0,
                 };
-            let idx = vox_idx(&ipos_to_check);
-            if chunk_voxels[idx] != VE::empty() {
+            let idx = vox_idx(ipos_to_check);
+            if chunk_voxels[idx] != VE::empty().id() {
                 // Reusing b_first here (with augmented meaning) to determine which axis was crossed for this check.
-                return hit(tlc, idx, if b_first { ax_c } else { ax_b });
+                return hit(tlc, idx, if b_first { ax_c } else { ax_b }, ipos_to_check);
             }
         }
 
         // Check the final possible voxel location, which we will always intersect
         if ipos.x < max_pt.x && ipos.x > min_pt.y {
             // check intersect voxel [ai, bi, ci]
-            let idx = vox_idx(&ipos);
-            if chunk_voxels[idx] != VE::empty() {
-                return hit(tlc, idx, ax_a);
+            let idx = vox_idx(ipos);
+            if chunk_voxels[idx] != VE::empty().id() {
+                return hit(tlc, idx, ax_a, ipos);
             }
         }
 
@@ -306,12 +317,14 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
         // If we finished loop without hitting a present block or leaving the axis b or c boundary, then we exited
         // due to axis a boundary being reached. In that case, we need to roll back pos by one step.
         if ipos.x > max_pt.x {
+            dbg!("a >");
             pos -= ray_dir;
 
             let mut tlc = tlc;
             tlc.0[ax_a] += 1;
-            pos[ax_a] = 0.0;
-            ipos[ax_a] = 0;
+            pos.x = 0.0;
+            ipos = pos.map(|a| a.floor() as i32);
+            ipos.x = 0;
             return Ok(CastRayInTlcResult::Miss(RayPos {
                 tlc,
                 pos: pos_xyz(pos),
@@ -319,13 +332,14 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
             }));
         }
         if ipos.x < min_pt.x {
-            ipos.x += 1;
+            dbg!("a <");
             pos -= ray_dir;
 
             let mut tlc = tlc;
             tlc.0[ax_a] -= 1;
-            pos[ax_a] = tlc_size as f32;
-            ipos[ax_a] = tlc_size - 1;
+            pos.x = tlc_size as f32;
+            ipos = pos.map(|a| a.floor() as i32);
+            ipos.x = tlc_size - 1;
             return Ok(CastRayInTlcResult::Miss(RayPos {
                 tlc,
                 pos: pos_xyz(pos),

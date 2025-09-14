@@ -1,7 +1,7 @@
 pub use crate::renderer::component::materials::Material;
 use enum_iterator::{all, Sequence};
 use num_traits::{FromPrimitive, ToPrimitive};
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::Hash};
 
 pub struct VoxelTypeDefinition<A> {
     pub material: Material,
@@ -11,10 +11,12 @@ pub struct VoxelTypeDefinition<A> {
 
 /// Trait for enum of all block types that must be defined. The first value (repr = 0) is assumed to
 /// be an empty block (e.g. 'air').
-pub trait VoxelTypeEnum: Sequence + Copy + FromPrimitive + ToPrimitive + Debug {
+pub trait VoxelTypeEnum: Sequence + Copy + FromPrimitive + ToPrimitive + Debug + Eq + Hash {
     type VoxelAttributes;
 
     fn def(&self) -> VoxelTypeDefinition<Self::VoxelAttributes>;
+
+    fn empty() -> Self;
 
     fn materials() -> Vec<Material> {
         // Check that ID fits in a u8.
@@ -25,5 +27,7 @@ pub trait VoxelTypeEnum: Sequence + Copy + FromPrimitive + ToPrimitive + Debug {
             .collect()
     }
 
-    fn empty() -> u8;
+    fn id(&self) -> u8 {
+        self.to_u8().unwrap()
+    }
 }

@@ -1,9 +1,8 @@
 use std::ops::Range;
 
+use crate::world::loader::ChunkLoadQueueItem;
 use crate::world::mem_grid::utils::index_for_pos;
-use crate::world::mem_grid::voxel::grid::GlobalVoxelPos;
 use crate::world::TlcPos;
-use crate::world::{loader::ChunkLoadQueueItem, TlcVector};
 use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use derive_new::new;
 use getset::{CopyGetters, Getters};

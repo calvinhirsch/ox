@@ -319,6 +319,43 @@ impl LODLayerData {
             ..Default::default()
         })
     }
+
+    /// Updates a voxel from a provided lower LOD. If this LOD has no voxel IDs and only a bitmask,
+    /// only the bitmask will be updated.
+    pub fn update_voxel_from_lower_lod<VE: VoxelTypeEnum>(
+        &mut self,
+        voxel_pos: VoxelPosInLod,
+        voxel_index: usize,
+        lower_lod: &LODLayerDataWithVoxelIDs,
+        lower_lvl: u8,
+        lower_sublvl: u8,
+        chunk_size: ChunkSize,
+        largest_chunk_lvl: u8,
+        block_fill_thresh: f32,
+    ) {
+        match self.with_voxel_ids_mut() {
+            None => self.update_bitmask_bit_from_lower_lod(
+                voxel_pos,
+                voxel_index,
+                lower_lod.0,
+                lower_lvl,
+                lower_sublvl,
+                chunk_size,
+                largest_chunk_lvl,
+                block_fill_thresh,
+            ),
+            Some(mut with_voxels) => with_voxels.update_voxel_from_lower_lod::<VE>(
+                lower_lod,
+                voxel_pos,
+                voxel_index,
+                lower_lvl,
+                lower_sublvl,
+                chunk_size,
+                largest_chunk_lvl,
+                block_fill_thresh,
+            ),
+        }
+    }
 }
 
 pub struct LODLayerDataWithVoxelIDsMut<'a>(&'a mut LODLayerData);
@@ -399,7 +436,7 @@ impl<'a> LODLayerDataWithVoxelIDsMut<'a> {
     }
 
     /// Recalculate LOD voxels from a lower LOD (i.e. a higher resolution LOD). Syncs entire buffer to GPU.
-    pub fn calc_from_lower_lod_voxels<VE: VoxelTypeEnum>(
+    pub fn update_from_lower_lod_voxels<VE: VoxelTypeEnum>(
         &mut self,
         lower_lod: LODLayerDataWithVoxelIDs,
         curr_lvl: u8,
@@ -415,67 +452,113 @@ impl<'a> LODLayerDataWithVoxelIDsMut<'a> {
             curr_sublvl,
             chunk_size,
             largest_chunk_lvl,
-            |voxel_pos| {
-                let voxel_index = voxel_pos.index(chunk_size, largest_chunk_lvl);
-
-                let mut visible_count = 0;
-                let mut count = 0;
-                let mut type_counts = HashMap::<u8, u32>::new();
-
-                apply_to_voxel_indices_in_lower_lod(
-                    voxel_pos,
-                    voxel_index,
+            |pos| {
+                let index = pos.index(chunk_size, largest_chunk_lvl);
+                let voxel_id = self.calc_voxel_from_lower_lod::<VE>(
+                    &lower_lod,
+                    pos,
+                    index,
                     lower_lvl,
                     lower_sublvl,
                     chunk_size,
                     largest_chunk_lvl,
-                    |idx| {
-                        count += 1;
-                        debug_assert!(
-                                idx < lower_lod.voxel_ids().n_voxels(),
-                                "bad voxel index: lower_lod.voxel_ids[{}] for {}-{}  (curr LOD: {}-{} count {})",
-                                idx,
-                                lower_lvl,
-                                lower_sublvl,
-                                curr_lvl,
-                                curr_sublvl,
-                                cubed(lod_tlc_size(
-                                    chunk_size,
-                                    largest_chunk_lvl,
-                                    curr_lvl,
-                                    curr_sublvl,
-                                )),
-                            );
-                        let id = lower_lod.voxel_ids()[idx];
-                        let vox_type = VE::from_u8(id).unwrap();
-                        if vox_type.def().is_visible {
-                            visible_count += 1;
-                            match type_counts.get_mut(&id) {
-                                None => {
-                                    type_counts.insert(id, 1);
-                                }
-                                Some(c) => {
-                                    *c += 1;
-                                }
-                            }
-                        }
-                    },
+                    lod_block_fill_thresh,
                 );
-
-                if visible_count as f32 >= lod_block_fill_thresh * count as f32 {
-                    self.voxel_ids_mut()[voxel_index] = type_counts
-                        .into_iter()
-                        .max_by_key(|a| a.1)
-                        .map(|(k, _)| k)
-                        .unwrap();
-                } else {
-                    self.voxel_ids_mut()[voxel_index] = VE::empty();
-                }
+                self.voxel_ids_mut()[index] = voxel_id.unwrap_or(VE::empty()).id();
             },
         );
 
         calc_full_bitmask::<VE>(self.0.voxel_ids.as_mut().unwrap(), &mut self.0.bitmask);
         self.update_full_buffer_gpu();
+    }
+
+    pub fn update_voxel_from_lower_lod<VE: VoxelTypeEnum>(
+        &mut self,
+        lower_lod: &LODLayerDataWithVoxelIDs,
+        pos: VoxelPosInLod,
+        index: usize,
+        lower_lvl: u8,
+        lower_sublvl: u8,
+        chunk_size: ChunkSize,
+        largest_chunk_lvl: u8,
+        lod_block_fill_thresh: f32,
+    ) {
+        let voxel_type = self.calc_voxel_from_lower_lod::<VE>(
+            &lower_lod,
+            pos,
+            index,
+            lower_lvl,
+            lower_sublvl,
+            chunk_size,
+            largest_chunk_lvl,
+            lod_block_fill_thresh,
+        );
+        self.set_voxel(index, voxel_type.unwrap_or(VE::empty()));
+    }
+
+    pub fn calc_voxel_from_lower_lod<VE: VoxelTypeEnum>(
+        &mut self,
+        lower_lod: &LODLayerDataWithVoxelIDs,
+        pos: VoxelPosInLod,
+        index: usize,
+        lower_lvl: u8,
+        lower_sublvl: u8,
+        chunk_size: ChunkSize,
+        largest_chunk_lvl: u8,
+        lod_block_fill_thresh: f32,
+    ) -> Option<VE> {
+        let mut visible_count = 0;
+        let mut count = 0;
+        let mut type_counts = HashMap::<VE, u32>::new();
+
+        apply_to_voxel_indices_in_lower_lod(
+            pos,
+            index,
+            lower_lvl,
+            lower_sublvl,
+            chunk_size,
+            largest_chunk_lvl,
+            |idx| {
+                count += 1;
+                debug_assert!(
+                    idx < lower_lod.voxel_ids().n_voxels(),
+                    "bad voxel index: lower_lod.voxel_ids[{}] for {}-{}",
+                    idx,
+                    lower_lvl,
+                    lower_sublvl,
+                );
+                let id = lower_lod.voxel_ids()[idx];
+                let vox_type = VE::from_u8(id).unwrap();
+                if vox_type.def().is_visible {
+                    visible_count += 1;
+                    match type_counts.get_mut(&vox_type) {
+                        None => {
+                            type_counts.insert(vox_type, 1);
+                        }
+                        Some(c) => {
+                            *c += 1;
+                        }
+                    }
+                }
+            },
+        );
+
+        if visible_count as f32 >= lod_block_fill_thresh * count as f32 {
+            Some(
+                type_counts
+                    .into_iter()
+                    .max_by_key(|a| a.1)
+                    .map(|(k, _)| k)
+                    .unwrap(),
+            )
+        } else {
+            None
+        }
+    }
+}
+impl<'a> Into<LODLayerDataWithVoxelIDs<'a>> for LODLayerDataWithVoxelIDsMut<'a> {
+    fn into(self) -> LODLayerDataWithVoxelIDs<'a> {
+        LODLayerDataWithVoxelIDs(self.0)
     }
 }
 
@@ -685,7 +768,7 @@ mod tests {
         assert!(indices.into_iter().all(|x| x));
     }
 
-    #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive)]
+    #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive, Hash, PartialEq, Eq)]
     pub enum Block {
         AIR,
         SOLID,
@@ -715,8 +798,8 @@ mod tests {
             }
         }
 
-        fn empty() -> u8 {
-            0
+        fn empty() -> Block {
+            Block::AIR
         }
     }
 

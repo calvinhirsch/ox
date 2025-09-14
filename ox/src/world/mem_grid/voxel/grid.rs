@@ -7,8 +7,9 @@ use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::{
     BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunkState,
 };
-use crate::world::mem_grid::utils::{cubed, ChunkSize, IteratorWithIndexing, VoxelPosInLod};
+use crate::world::mem_grid::utils::{ChunkSize, IteratorWithIndexing, VoxelPosInLod};
 use crate::world::mem_grid::voxel::gpu_defs::ChunkVoxels;
+use crate::world::mem_grid::voxel::lod::LODLayerDataWithVoxelIDs;
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
 use crate::world::{TlcPos, VoxelPos};
 use cgmath::{Array, EuclideanSpace, Vector3};
@@ -258,37 +259,64 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
         }
     }
 
+    /// Requires that this TLC has full LOD. Requires both position and index of the voxel.
     pub fn set_voxel(
         &mut self,
-        index_in_tlc: usize,
-        voxel_typ: VE,
-        meta: &VoxelMemoryGridMetadata,
-    ) {
-        for lod in self.lods.iter_mut().filter_map(|x| x.as_mut()) {
-            let (lvl, sublvl) = (lod.lvl(), lod.sublvl());
-            if let Some(mut data) = lod
-                .data_mut()
-                .get_mut()
-                .map(|d| d.with_voxel_ids_mut())
-                .flatten()
-            {
-                let block_size = meta.chunk_size.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
-                data.set_voxel(index_in_tlc / cubed(block_size), voxel_typ);
-            }
-        }
-    }
-
-    pub fn set_voxel_pos(
-        &mut self,
         pos: VoxelPos<u32>,
+        index: usize,
         voxel_typ: VE,
         meta: &VoxelMemoryGridMetadata,
-    ) {
-        self.set_voxel(
-            VoxelPosInLod::in_full_lod(pos).index(meta.chunk_size, meta.largest_lod.lvl),
-            voxel_typ,
-            meta,
-        );
+    ) -> Result<(), ()> {
+        // first make sure all LODs are loaded
+        if self.lods.iter().any(|lod| match lod {
+            None => false,
+            Some(lod) => lod.data().get().is_none(),
+        }) {
+            return Err(());
+        }
+
+        let mut iter = self.lods.iter_mut();
+        let mut first_lod = iter
+            .next()
+            .unwrap()
+            .as_mut()
+            .expect("Tried to set_voxel in a chunk where full LOD was not loaded")
+            .data_mut()
+            .get_mut()
+            .unwrap()
+            .with_voxel_ids_mut()
+            .unwrap();
+        first_lod.set_voxel(index, voxel_typ);
+        let first_lod: LODLayerDataWithVoxelIDs = first_lod.into();
+
+        dbg!("set_voxel");
+        dbg!(pos);
+
+        for lod in iter.filter_map(|x| x.as_mut()) {
+            let (lvl, sublvl) = (lod.lvl(), lod.sublvl());
+            let lod_pos = VoxelPosInLod {
+                pos: pos.0,
+                lvl: 0,
+                sublvl: 0,
+            }
+            .in_other_lod(lvl, sublvl, meta.chunk_size);
+            dbg!(lvl, sublvl, &lod_pos);
+            lod.data_mut()
+                .get_mut()
+                .unwrap()
+                .update_voxel_from_lower_lod::<VE>(
+                    lod_pos,
+                    lod_pos.index(meta.chunk_size, meta.largest_lod.lvl),
+                    &first_lod,
+                    0,
+                    0,
+                    meta.chunk_size,
+                    meta.largest_lod.lvl,
+                    meta.lod_block_fill_thresh,
+                );
+        }
+
+        Ok(())
     }
 
     pub fn no_missing_lods(&self) -> bool {
@@ -388,7 +416,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                     if let Some(mut data) = data.with_voxel_ids_mut() {
                         if let Some(last_vox_lod) = last_vox_lod.as_ref() {
                             // Load voxels based on higher fidelity LOD that is already loaded
-                            data.calc_from_lower_lod_voxels::<VE>(
+                            data.update_from_lower_lod_voxels::<VE>(
                                 unsafe {
                                     (&**lods_to_index[last_vox_lod.index].as_ref().unwrap().data())
                                         .get_for_loading()
@@ -463,25 +491,23 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct GlobalVoxelPos {
-    pub tlc: TlcPos<i64>,
-    pub voxel_index: usize,
-}
-impl GlobalVoxelPos {
-    pub fn new(global_pos: VoxelPos<i64>, chunk_size: ChunkSize, largest_chunk_lvl: u8) -> Self {
-        let tlc_size = chunk_size.size().pow(largest_chunk_lvl as u32);
-        let global_tlc = global_pos.0 / tlc_size as i64;
-        let pos_in_tlc = (global_pos.0 - (global_tlc * tlc_size as i64).to_vec())
-            .cast::<u32>()
-            .unwrap();
-
-        GlobalVoxelPos {
-            tlc: TlcPos(global_tlc),
-            voxel_index: VoxelPosInLod::in_full_lod(VoxelPos(pos_in_tlc))
-                .index(chunk_size, largest_chunk_lvl),
-        }
-    }
+/// Given a global full LOD voxel position, return the top level chunk it is
+/// in and the position within that chunk.
+pub fn voxel_pos_in_tlc_from_global_pos(
+    global_pos: VoxelPos<i64>,
+    chunk_size: ChunkSize,
+    largest_chunk_lvl: u8,
+) -> (TlcPos<i64>, VoxelPos<u32>) {
+    let tlc_size = chunk_size.size().pow(largest_chunk_lvl as u32);
+    let global_tlc = global_pos.0 / tlc_size as i64;
+    (
+        TlcPos(global_tlc),
+        VoxelPos(
+            (global_pos.0 - (global_tlc * tlc_size as i64).to_vec())
+                .cast::<u32>()
+                .unwrap(),
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -499,7 +525,7 @@ mod tests {
 
     const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
 
-    #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive)]
+    #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq, Hash)]
     pub enum Block {
         AIR,
         SOLID,
@@ -529,8 +555,8 @@ mod tests {
             }
         }
 
-        fn empty() -> u8 {
-            0
+        fn empty() -> Block {
+            Block::AIR
         }
     }
 

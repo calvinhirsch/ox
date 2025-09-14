@@ -30,7 +30,7 @@ pub const fn pos_for_index(index: usize, size: usize) -> Point3<usize> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 /// Position relative to bottom corner of current TLC in units of this LOD. For example,
 /// if LOD  lvl=0 and sublvl=2, pos_in_tlc should be in units 4x larger than highest
 /// fidelity voxels (i.e. 4 in world coords).
@@ -45,6 +45,17 @@ impl VoxelPosInLod {
             pos: pos.0,
             lvl: 0,
             sublvl: 0,
+        }
+    }
+
+    pub fn in_other_lod(self, lvl: u8, sublvl: u8, chunk_size: ChunkSize) -> Self {
+        let full_lod_pos = self
+            .pos
+            .map(|a| a << (chunk_size.exp() * self.lvl + self.sublvl));
+        VoxelPosInLod {
+            pos: full_lod_pos.map(|a| a >> (chunk_size.exp() * lvl + sublvl)),
+            lvl,
+            sublvl,
         }
     }
 
@@ -67,6 +78,10 @@ impl VoxelPosInLod {
 
         idx
     }
+}
+
+pub fn tlc_size(chunk_size: ChunkSize, largest_lvl: u8, lvl: u8, sublvl: u8) -> usize {
+    1usize << (chunk_size.exp() * (largest_lvl - lvl) - sublvl)
 }
 
 pub struct IteratorWithIndexing<I, T>

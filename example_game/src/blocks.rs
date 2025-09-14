@@ -8,7 +8,7 @@ pub struct BlockTypeAttrs {
     dollars: u32,
 }
 
-#[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq, Hash)]
 pub enum Block {
     Air,
     Debug,
@@ -113,7 +113,7 @@ impl VoxelTypeEnum for Block {
         }
     }
 
-    fn empty() -> u8 {
-        0
+    fn empty() -> Block {
+        Block::Air
     }
 }

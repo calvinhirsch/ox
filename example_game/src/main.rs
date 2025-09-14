@@ -335,13 +335,19 @@ fn main() {
                                 CHUNK_SIZE,
                                 largest_lod.lvl(),
                             ) {
-                                Ok(CastRayResult::Hit(RayVoxelIntersect { voxel, .. })) => {
-                                    editor
+                                Ok(CastRayResult::Hit(RayVoxelIntersect {
+                                    pos,
+                                    index,
+                                    tlc,
+                                    ..
+                                })) => {
+                                    dbg!(pos, index, tlc);
+                                    let _ = editor
                                         .mem_grid
-                                        .chunk_mut(voxel.tlc)
+                                        .chunk_mut(tlc)
                                         .unwrap()
                                         .voxel
-                                        .set_voxel(voxel.voxel_index, Block::Air, &meta);
+                                        .set_voxel(pos, index, Block::Air, &meta);
                                 }
                                 _ => {}
                             }
