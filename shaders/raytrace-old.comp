@@ -5,7 +5,6 @@
 
 #define cubed(X) ((X) * (X) * (X))
 #define squared(X) ((X)*(X))
-#define a_dir(RAY_DIR_ABC) (int(ray_dir_abc.x > 0) * 2 - 1)
 
 #define LOCAL_SIZE 8
 
@@ -19,7 +18,7 @@
 #define N_MATERIAL_ID_BITS 8
 #define N_MATERIALS 3
 
-#define TRAVERSAL_SAFETY_LIMIT 200
+#define TRAVERSAL_SAFETY_LIMIT 100
 
 const uint CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS + 2] = { // Chunk level 0 means working directly with voxels of size 1
         1,
@@ -551,7 +550,6 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
         uint global_idx;
 
         uint safety_limit = 0;
-        uint crossed_ax_abc = 0;
         for (; safety_limit < TRAVERSAL_SAFETY_LIMIT && !done; safety_limit++) {
             // Trace ray within current chunk (at chunk level `lvl`) until we either hit a solid voxel/subchunk or exit this chunk.
             // If we are at lvl=0 and hit a voxel, bounce ray
@@ -567,129 +565,162 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
             uvec3 chunk_botleft_blk = chunk_abs_botleft_block(lvl, sublvl, axis_a, axis_b, axis_c);
 
             // Establish search boundaries based on current chunk lvl
-            ivec3 min_pt = ivec3(0, 0, 0);
+
+            ivec3 min_pt = ivec3(-1, -1, -1);
             ivec3 max_pt;
+
             if (lvl == N_CHUNK_LVLS) {
-                max_pt = ivec3(RENDER_N_TLCS, RENDER_N_TLCS, RENDER_N_TLCS) - 1;
+                max_pt = ivec3(RENDER_N_TLCS, RENDER_N_TLCS, RENDER_N_TLCS);
             }
             else {
-                max_pt = ivec3(uvec3(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE) >> sublvl) - 1;
+                max_pt = ivec3(uvec3(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE) >> sublvl);
             }
 
             // Set ray_origin_abc to now be the relative position in current chunk in units of current level (should be within min_pt, max_pt)
             // It will be set back to global coords (with zero lvl/sublvl) before the start of the next traversal
             ray_origin_abc = ((ray_origin_abc / CHUNK_LVL_BLOCK_SIZE[lvl]) / pow(2, sublvl)) - chunk_botleft_blk;
 
-            // ipos = Integer position of the block we are currently on (i.e., will check next) at the current level
+            // ipos = Integer position of the block we are currently on at the current level
             ivec3 ipos = ivec3(block[lvl][axis_a], block[lvl][axis_b], block[lvl][axis_c]);
+            int last_bi = ipos.y;
+            int last_ci = ipos.z;
 
-            // Traverse until we hit a block or exit the chunk
+            // We want to step a by 1 (or -1 if it is in negative direction) and the other axes relative to that
+            int a_dir = int(ray_dir_abc.x > 0) * 2 - 1;
 
-            while (true) {
-                // At each iteration of this traversal loop, ipos is the integer position of the block
-                // the ray has just come into contact with. This
-                // means that if the ray direction is negative, the ipos coordinate will be equal to
-                // the ray coord - 1, because the ray has just hit the "top" side of the block while
-                // the integer position of the block is the "lower" side. If the ray direction is
-                // positive, they will be equal.
+            uvec3 xyz_to_abc = uvec3(0, 0, 0);
+            xyz_to_abc[axis_a] = 0;
+            xyz_to_abc[axis_b] = 1;
+            xyz_to_abc[axis_c] = 2;
+            uint crossed_ax_abc = xyz_to_abc[crossed_ax];
 
-                // FIRST CHECK: block at ipos
-                // Here, if we just entered this chunk by going out of bounds of the previous chunk in
-                // axis B or C, ray origin will be at the point we crossed, not at a round A value.
-                // This means that ipos may also not be at a block where we cross the A axis border.
-                global_idx = global_index(ipos, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
-                if (is_true_in_mask(global_idx, lvl)) {
-                    // Hit!
-                    hit = true;
-                    // crossed_ax_abc should be left as whatever axis we crossed in prev iter
-                    break;
-                }
+            // Check if the block we are starting in got hit
+            global_idx = global_index(ipos, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
+            if (is_true_in_mask(global_idx, lvl)) {
+                // Hit!
+                hit = true;
+                // Don't need to update crossed_ax because it remains the same as previous level/iteration
+            }
+            else {
+                // Find a step magnitude that will snap ray_origin_abc to the desired integer a value (ipos.x)
+                // If a_dir is negative then we need to add 1 because we are at the 'top' (larger a) side of block ai
+                float a_floor_amt = ray_origin_abc.x - (ipos.x + int(ray_dir_abc.x < 0));
+                ray_origin_abc -= ray_dir_abc * a_floor_amt * a_dir;
 
-                // Step the ray forward to the next integer value in the A axis
-                // we will then check all the blocks it crosses through
-
-                int last_bi = ipos.y;
-                int last_ci = ipos.z;
-                // Step A axis by 1
-                ipos.x += a_dir(ray_dir_abc);
-                // Nnap ray origin to appropriate A axis value along ray direction.
-                // As noted above, this is because it may not have started at a round A value.
-                ray_origin_abc += ray_dir_abc * (ipos.x - ray_origin_abc.x + int(ray_dir_abc.x < 0)) * (1 / ray_dir_abc.x);
-                // set B and C axis values to match ray origin
+                // Step ray since we just checked the first block already
+                ipos.x += a_dir;
+                ray_origin_abc += ray_dir_abc;
                 ipos.yz = ivec2(floor(ray_origin_abc.yz));
+            }
 
-                bool b_crossed = ipos.y != last_bi;
-                bool c_crossed = ipos.z != last_ci;
-                bool b_ib = ipos.y >= min_pt.y && ipos.y <= max_pt.y; // is b still in bounds
-                bool c_ib = ipos.z >= min_pt.z && ipos.z <= max_pt.z; // is c still in bounds
+            // If we didn't hit the starting block, search all other intersecting blocks
+            // Traverse grid until hit a present voxel (a true value in the bitmask)
+            if (!hit) {
+                crossed_ax_abc = 0;
 
-                // warning: this variable is used in a non-obvious way (see later use of it for details)
-                bool b_first;
+                while (ipos.x <= max_pt.x && ipos.x >= min_pt.x) {
+                    // At each iteration of this traversal loop, ipos is
+                    // the integer position of the block the ray has just come into contact with. This
+                    // means that if the ray direction is negative, the ipos coordinate will be equal to
+                    // the ray coord - 1, because the ray has just hit the "top" side of the block while
+                    // the integer position of the block is the "lower" side. If the ray direction is
+                    // positive, they will be equal.
 
-                // SECOND CHECK: in the case where we cross all three axes, the second voxel
-                // intersected is determined by which axis we cross first.
-                if (b_crossed && c_crossed) {
-                    vec2 dist_to_crossed_pt = abs((ipos.yz + ivec2(ray_dir_abc.y < 0, ray_dir_abc.z < 0) - (ray_origin_abc.yz - ray_dir_abc.yz)) / (ray_dir_abc.yz + 0.0000001)); // for b, c
-                    // Whether crossed axis b before crossing axis c
-                    b_first = dist_to_crossed_pt.x < dist_to_crossed_pt.y;
-                    if ((b_first && b_ib) || (!b_first && c_ib)) {
-                        // if b crossed first check intersect voxel [a-a_dir, bi, last_ci] else [a-a_dir, last_bi, ci]
-                        ivec3 ipos_to_check = ipos - ivec3(a_dir(ray_dir_abc), ivec2(int(!b_first), int(b_first)) * (ivec2(ray_dir_abc.y > 0, ray_dir_abc.z > 0) * 2 - 1));
+                    bool b_crossed = ipos.y != last_bi;
+                    bool c_crossed = ipos.z != last_ci;
+                    bool b_ib = ipos.y > min_pt.y && ipos.y < max_pt.y; // is b still in bounds
+                    bool c_ib = ipos.z > min_pt.z && ipos.z < max_pt.z; // is c still in bounds
+
+                    // warning: this variable is used in a non-obvious way (see later use of it for details)
+                    bool b_first;
+
+                    // Check first possible voxel location, in the case where we cross all three axes, the first voxel
+                    // intersected is determined by which axis we cross first.
+                    if (b_crossed && c_crossed) {
+                        vec2 dist_to_crossed_pt = abs((ipos.yz + ivec2(ray_dir_abc.y < 0, ray_dir_abc.z < 0) - (ray_origin_abc.yz - ray_dir_abc.yz)) / (ray_dir_abc.yz + 0.0000001)); // for b, c
+                        // Whether crossed axis b before crossing axis c
+                        b_first = dist_to_crossed_pt.x < dist_to_crossed_pt.y;
+                        if ((b_first && b_ib) || (!b_first && c_ib)) {
+                            // if b crossed first check intersect voxel [a-a_dir, bi, last_ci] else [a-a_dir, last_bi, ci]
+                            ivec3 ipos_to_check = ipos - ivec3(a_dir, ivec2(int(!b_first), int(b_first)) * (ivec2(ray_dir_abc.y > 0, ray_dir_abc.z > 0) * 2 - 1));
+                            global_idx = global_index(ipos_to_check, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
+
+                            if (is_true_in_mask(global_idx, lvl)) {
+                                // Hit!
+                                hit = true;
+                                crossed_ax_abc = 2 - int(b_first);
+
+                                ipos = ipos_to_check;
+                                break;
+                            }
+                        }
+                    }
+                    else if (b_crossed) {
+                        b_first = false;
+                    }
+                    else if (c_crossed) {
+                        b_first = true;
+                    }
+
+                    // If we went out of bounds in either b axis or c axis, break
+                    if (!b_ib && (c_ib || b_first)) {
+                        crossed_ax_abc = 1;
+                        break;
+                    }
+                    if (!c_ib) {
+                        crossed_ax_abc = 2;
+                        break;
+                    }
+
+                    // Check second possible voxel location, in the case where we cross two or three axes, the voxel
+                    // the ray intersects before going into [a-a_dir, bi, ci]
+                    if (b_crossed || c_crossed) {
+                        // check intersect voxel [a-a_dir, bi, ci]
+                        ivec3 ipos_to_check = ipos - ivec3(a_dir, 0, 0);
                         global_idx = global_index(ipos_to_check, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
 
                         if (is_true_in_mask(global_idx, lvl)) {
                             // Hit!
                             hit = true;
-                            crossed_ax_abc = 2 - int(b_first);
+                            // Reusing b_first here (with augmented meaning) to determine which axis was crossed for this check.
+                            crossed_ax_abc = 1 + int(b_first); // crossed axis c if b_first else axis b
 
                             ipos = ipos_to_check;
                             break;
                         }
                     }
-                }
-                else if (b_crossed) {
-                    b_first = false;
-                }
-                else if (c_crossed) {
-                    b_first = true;
-                }
 
-                // If we went out of bounds in either b axis or c axis, break
-                if (!b_ib && (c_ib || b_first)) {
-                    crossed_ax_abc = 1;
-                    break;
-                }
-                if (!c_ib) {
-                    crossed_ax_abc = 2;
-                    break;
-                }
+                    // Check the final possible voxel location, which we will always intersect
+                    if (ipos.x < max_pt.x && ipos.x > min_pt.y) {
+                        // check intersect voxel [ai, bi, ci]
+                        global_idx = global_index(ipos, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
 
-                // THIRD CHECK: in the case where we cross two or three axes, the voxel
-                // the ray intersects before crossing into the next integer A-axis value
-                if (b_crossed || c_crossed) {
-                    // check intersect voxel [a-a_dir, bi, ci]
-                    ivec3 ipos_to_check = ipos - ivec3(a_dir(ray_dir_abc), 0, 0);
-                    global_idx = global_index(ipos_to_check, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
-
-                    if (is_true_in_mask(global_idx, lvl)) {
-                        // Hit!
-                        hit = true;
-                        // Reusing b_first here (with augmented meaning) to determine which axis was crossed for this check.
-                        crossed_ax_abc = 1 + int(b_first); // crossed axis c if b_first else axis b
-
-                        ipos = ipos_to_check;
-                        break;
+                        if (is_true_in_mask(global_idx, lvl)) {
+                            // Hit!
+                            hit = true;
+                            crossed_ax_abc = 0;
+                            break;
+                        }
                     }
-                }
 
-                if (ipos.x > max_pt.x || ipos.x < min_pt.x) {
-                    crossed_ax_abc = 0;
-                    break;
+                    last_bi = ipos.y;
+                    last_ci = ipos.z;
+                    ipos.x += a_dir;
+                    ray_origin_abc += ray_dir_abc;
+                    ipos.yz = ivec2(floor(ray_origin_abc.yz));
                 }
             }
 
             // Finishing travelling through this chunk at this level. We have either hit a block (i.e. a voxel or subchunk)
             // or reached a boundary of the chunk.
+
+            // If we finished loop without hitting a present block or leaving the axis b or c boundary, then we exited
+            // due to axis a boundary being reached. In that case, we need to roll back ipos by one step.
+            if (!hit && crossed_ax_abc == 0) {
+                ipos.x -= a_dir;
+                ray_origin_abc -= ray_dir_abc;
+                ipos.yz = ivec2(floor(ray_origin_abc.yz));
+            }
 
             if (hit) {
                 block[lvl][axis_a] = uint(ipos.x);
