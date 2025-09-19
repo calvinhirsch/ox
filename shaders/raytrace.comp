@@ -585,7 +585,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
             // Traverse until we hit a block or exit the chunk
 
-            while (true) {
+            while (ipos.x <= max_pt.x && ipos.x >= min_pt.x) {
                 // At each iteration of this traversal loop, ipos is the integer position of the block
                 // the ray has just come into contact with. This
                 // means that if the ray direction is negative, the ipos coordinate will be equal to
@@ -682,10 +682,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                     }
                 }
 
-                if (ipos.x > max_pt.x || ipos.x < min_pt.x) {
-                    crossed_ax_abc = 0;
-                    break;
-                }
+                crossed_ax_abc = 0;
             }
 
             // Finishing travelling through this chunk at this level. We have either hit a block (i.e. a voxel or subchunk)
