@@ -129,8 +129,8 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
     };
 
     // Bounds of traversal
-    let min_pt = Vector3::from_value(-1i32);
-    let max_pt = Vector3::from_value(tlc_size);
+    let min_pt = Vector3::from_value(0i32);
+    let max_pt = Vector3::from_value(tlc_size - 1);
 
     let a_dir = (ray_dir.x > 0.0) as i32 * 2 - 1;
 
