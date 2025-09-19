@@ -612,9 +612,9 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                 int last_ci = ipos.z;
                 // Step A axis by 1
                 ipos.x += a_dir(ray_dir_abc);
-                // Nnap ray origin to appropriate A axis value along ray direction.
+                // Snap ray origin to appropriate A axis value along ray direction.
                 // As noted above, this is because it may not have started at a round A value.
-                ray_origin_abc += ray_dir_abc * (ipos.x - ray_origin_abc.x + int(ray_dir_abc.x < 0)) * (1 / ray_dir_abc.x);
+                ray_origin_abc += ray_dir_abc * (ipos.x - ray_origin_abc.x + int(ray_dir_abc.x < 0)) * (1 / (ray_dir_abc.x + 0.0000001));
                 // set B and C axis values to match ray origin
                 ipos.yz = ivec2(floor(ray_origin_abc.yz));
 
