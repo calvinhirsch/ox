@@ -312,7 +312,38 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
             }
         }
 
+        // Check if we are out of bounds
+
         crossed_ax = 0;
+
+        // If we finished loop without hitting a present block or leaving the axis b or c boundary, then we exited
+        // due to axis a boundary being reached. In that case, we need to roll back pos by one step.
+        if ipos.x > max_pt.x {
+            let mut tlc = tlc;
+            tlc.0[ax_a] += 1;
+            pos.x = 0.0;
+            ipos = pos.map(|a| a.floor() as i32);
+            ipos.x = 0;
+            return Ok(CastRayInTlcResult::Miss(RayPos {
+                tlc,
+                pos: pos_xyz(pos),
+                ipos: ipos_xyz(ipos),
+                last_crossed_ax: Some(ax_a),
+            }));
+        }
+        if ipos.x < min_pt.x {
+            let mut tlc = tlc;
+            tlc.0[ax_a] -= 1;
+            pos.x = tlc_size as f32;
+            ipos = pos.map(|a| a.floor() as i32);
+            ipos.x = tlc_size - 1;
+            return Ok(CastRayInTlcResult::Miss(RayPos {
+                tlc,
+                pos: pos_xyz(pos),
+                ipos: ipos_xyz(ipos),
+                last_crossed_ax: Some(ax_a),
+            }));
+        }
 
         i += 1;
         if i > TRAVERSAL_SAFETY_LIMIT {

@@ -96,6 +96,10 @@ fn main() {
     let event_loop = EventLoop::new();
 
     let (renderer_context, window) = Context::new(&event_loop);
+    window
+        .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+        .unwrap();
+    window.set_cursor_visible(false);
 
     let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 });
 
@@ -220,13 +224,7 @@ fn main() {
             WorldChunkLoadQueueItemData<N_LODS>,
             WorldEditorMetadata,
             BorrowedWorldChunkEditor<N_LODS>,
-        >::new(ChunkLoaderParams {
-            // n_threads: 1,
-            n_threads: usize::from(
-                std::thread::available_parallelism()
-                    .expect("Failed to determine available parallelism"),
-            ) * 2,
-        }),
+        >::new(ChunkLoaderParams { n_threads: 5 }),
         Camera::new(tlc_size, mem_grid_size),
         tlc_size,
         16,

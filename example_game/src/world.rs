@@ -321,23 +321,22 @@ fn generate_chunk(
                 //     } as u8;
 
                 // flat world
-                let within_main_tlc = x >= 64 * 7 && x < 64 * 8 && z >= 64 * 7 && z < 64 * 8;
-                voxel_ids_out[idx] = if y < 64 * 7 + 8 && within_main_tlc {
+                let within_area = x >= 64 * 5 && x < 64 * 10 && z >= 64 * 5 && z < 64 * 10;
+                voxel_ids_out[idx] = if y < 64 * 7 + 8 && within_area {
                     Block::GrayCarpet
                 } else {
                     Block::Air
                 } as u8;
-                if y == 64 * 7 + 8 && x % 8 == 0 && z % 8 == 0 && within_main_tlc {
+                if y == 64 * 7 + 8 && x % 8 == 0 && z % 8 == 0 && within_area {
                     voxel_ids_out[idx] = Block::RedLight as u8;
                 }
-                if y == 64 * 7 + 8 && x % 8 == 4 && z % 8 == 4 && within_main_tlc {
+                if y == 64 * 7 + 8 && x % 8 == 4 && z % 8 == 4 && within_area {
                     voxel_ids_out[idx] = Block::GreenLight as u8;
                 }
-                if y == 64 * 7 + 8 && x % 8 == 4 && z % 8 == 0 && within_main_tlc {
+                if y == 64 * 7 + 8 && x % 8 == 4 && z % 8 == 0 && within_area {
                     voxel_ids_out[idx] = Block::BlueLight as u8;
                 }
-                if y >= 64 * 7 + 8 && y < 64 * 7 + 11 && x % 8 == 0 && z % 8 == 4 && within_main_tlc
-                {
+                if y >= 64 * 7 + 8 && y < 64 * 7 + 11 && x % 8 == 0 && z % 8 == 4 && within_area {
                     voxel_ids_out[idx] = Block::Mirror as u8;
                 }
             }

@@ -13,7 +13,7 @@
 #define N_CHUNK_LVLS 2  // 2 means there are two chunk sizes (CHUNK_SIZE and CHUNK_SIZE**2) where the largest chunk size is the world height
 
 #define N_BOUNCES 3
-#define N_CASTS 2
+#define N_CASTS 1
 
 #define RENDER_N_TLCS 15
 #define N_MATERIAL_ID_BITS 8
@@ -628,27 +628,29 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
                 // SECOND CHECK: in the case where we cross all three axes, the second voxel
                 // intersected is determined by which axis we cross first.
-                if (b_crossed && c_crossed) {
-                    vec2 dist_to_crossed_pt = abs((ipos.yz + ivec2(ray_dir_abc.y < 0, ray_dir_abc.z < 0) - (ray_origin_abc.yz - ray_dir_abc.yz)) / (ray_dir_abc.yz + 0.0000001)); // for b, c
-                    // Whether crossed axis b before crossing axis c
-                    b_first = dist_to_crossed_pt.x < dist_to_crossed_pt.y;
-                    if ((b_first && b_ib) || (!b_first && c_ib)) {
-                        // if b crossed first check intersect voxel [a-a_dir, bi, last_ci] else [a-a_dir, last_bi, ci]
-                        ivec3 ipos_to_check = ipos - ivec3(a_dir(ray_dir_abc), ivec2(int(!b_first), int(b_first)) * (ivec2(ray_dir_abc.y > 0, ray_dir_abc.z > 0) * 2 - 1));
-                        global_idx = global_index(ipos_to_check, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
+                if (b_crossed) {
+                    if (c_crossed) {
+                        vec2 dist_to_crossed_pt = abs((ipos.yz + ivec2(ray_dir_abc.y < 0, ray_dir_abc.z < 0) - (ray_origin_abc.yz - ray_dir_abc.yz)) / (ray_dir_abc.yz + 0.0000001)); // for b, c
+                        // Whether crossed axis b before crossing axis c
+                        b_first = dist_to_crossed_pt.x < dist_to_crossed_pt.y;
+                        if ((b_first && b_ib) || (!b_first && c_ib)) {
+                            // if b crossed first check intersect voxel [a-a_dir, bi, last_ci] else [a-a_dir, last_bi, ci]
+                            ivec3 ipos_to_check = ipos - ivec3(a_dir(ray_dir_abc), ivec2(int(!b_first), int(b_first)) * (ivec2(ray_dir_abc.y > 0, ray_dir_abc.z > 0) * 2 - 1));
+                            global_idx = global_index(ipos_to_check, lvl, sublvl, axis_a, axis_b, axis_c, chunk_botleft_idx);
 
-                        if (is_true_in_mask(global_idx, lvl)) {
-                            // Hit!
-                            hit = true;
-                            crossed_ax_abc = 2 - int(b_first);
+                            if (is_true_in_mask(global_idx, lvl)) {
+                                // Hit!
+                                hit = true;
+                                crossed_ax_abc = 2 - int(b_first);
 
-                            ipos = ipos_to_check;
-                            break;
+                                ipos = ipos_to_check;
+                                break;
+                            }
                         }
                     }
-                }
-                else if (b_crossed) {
-                    b_first = false;
+                    else {
+                        b_first = false;
+                    }
                 }
                 else if (c_crossed) {
                     b_first = true;
@@ -796,6 +798,9 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
     return light;
 }
 
+#define CROSSHAIR_THICKNESS 1
+#define CROSSHAIR_LEN 8
+
 void main() {
     vec3 light = vec3(0, 0, 0);
     ivec2 win_size = imageSize(image);
@@ -817,6 +822,14 @@ void main() {
     //////              END              //////
 
     if (gl_GlobalInvocationID.x >= win_size.x || gl_GlobalInvocationID.y >= win_size.y) {
+        return;
+    }
+    if (abs(int(gl_GlobalInvocationID.x) - int(win_size.x / 2)) < CROSSHAIR_THICKNESS && abs(int(gl_GlobalInvocationID.y) - int(win_size.y / 2)) < CROSSHAIR_LEN) {
+        imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(1, 1, 1, 1));
+        return;
+    }
+    if (abs(int(gl_GlobalInvocationID.x) - int(win_size.x / 2)) < CROSSHAIR_LEN && abs(int(gl_GlobalInvocationID.y) - int(win_size.y / 2)) < CROSSHAIR_THICKNESS) {
+        imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(1, 1, 1, 1));
         return;
     }
 
