@@ -110,9 +110,6 @@ impl<const N: usize> MemoryGrid for WorldMemoryGrid<N> {
         let mut queue = HashMap::new();
 
         for item in self.voxel.shift(shift) {
-            if item.data.lods[0] {
-                dbg!(item.pos);
-            }
             debug_assert!(queue
                 .insert(
                     item.pos.0,
@@ -238,18 +235,6 @@ unsafe impl<const N: usize> Send for BorrowedWorldChunkEditor<N> {}
 
 unsafe impl<const N: usize> BorrowedChunk for BorrowedWorldChunkEditor<N> {
     unsafe fn mark_valid(&mut self) {
-        if self.voxel.lods()[0].is_some() {
-            dbg!(
-                "VALID",
-                (&**self.voxel.lods()[0].as_ref().unwrap().data())
-                    .get_for_loading()
-                    .bitmask()
-                    .bitmask
-                    .iter()
-                    .map(|bm| (bm.mask > 0) as u32)
-                    .sum::<u32>()
-            );
-        }
         if let Some(e) = self.entity {
             unsafe {
                 (&mut *e).set_valid();
@@ -321,23 +306,43 @@ fn generate_chunk(
                 //     } as u8;
 
                 // flat world
-                let within_area = x >= 64 * 5 && x < 64 * 10 && z >= 64 * 5 && z < 64 * 10;
-                voxel_ids_out[idx] = if y < 64 * 7 + 8 && within_area {
-                    Block::GrayCarpet
-                } else {
-                    Block::Air
-                } as u8;
-                if y == 64 * 7 + 8 && x % 8 == 0 && z % 8 == 0 && within_area {
-                    voxel_ids_out[idx] = Block::RedLight as u8;
-                }
-                if y == 64 * 7 + 8 && x % 8 == 4 && z % 8 == 4 && within_area {
-                    voxel_ids_out[idx] = Block::GreenLight as u8;
-                }
-                if y == 64 * 7 + 8 && x % 8 == 4 && z % 8 == 0 && within_area {
-                    voxel_ids_out[idx] = Block::BlueLight as u8;
-                }
-                if y >= 64 * 7 + 8 && y < 64 * 7 + 11 && x % 8 == 0 && z % 8 == 4 && within_area {
-                    voxel_ids_out[idx] = Block::Mirror as u8;
+                // let tlc_size = CHUNK_SIZE.size().pow(2) as i64;
+                // let center_tlc = 15;
+                // let within_area = x >= tlc_size * (center_tlc - 2)
+                //     && x < tlc_size * (center_tlc + 2)
+                //     && z >= tlc_size * (center_tlc - 2)
+                //     && z < tlc_size * (center_tlc + 2);
+                // voxel_ids_out[idx] = if y < tlc_size * center_tlc + 8 && within_area {
+                //     Block::GrayCarpet
+                // } else {
+                //     Block::Air
+                // } as u8;
+                // if y == tlc_size * center_tlc + 8 && x % 8 == 0 && z % 8 == 0 && within_area {
+                //     voxel_ids_out[idx] = Block::RedLight as u8;
+                // }
+                // if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 4 && within_area {
+                //     voxel_ids_out[idx] = Block::GreenLight as u8;
+                // }
+                // if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 0 && within_area {
+                //     voxel_ids_out[idx] = Block::BlueLight as u8;
+                // }
+                // if y >= tlc_size * center_tlc + 8
+                //     && y < tlc_size * center_tlc + 11
+                //     && x % 8 == 0
+                //     && z % 8 == 4
+                //     && within_area
+                // {
+                //     voxel_ids_out[idx] = Block::Mirror as u8;
+                // }
+
+                // hills
+                let avg_height = 64.0 * 14.0;
+                let amp = 24.0;
+                let period = 24.0;
+                if (y as f64)
+                    < ((x as f64 / period).sin() + (z as f64 / period).sin()) * amp + avg_height
+                {
+                    voxel_ids_out[idx] = Block::Grass as u8;
                 }
             }
         }

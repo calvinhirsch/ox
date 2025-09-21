@@ -1,10 +1,3 @@
-issue with shader:
-if a ray goes out of bounds of the current chunk being traversed by being OOB in axis B
-and it also then crosses axis C in that step (i.e., before hitting the next integer value
-of axis A), I think the check of that second block that is hit when crossing axis C
-never happens, because there is only a single check of the "starting block", which is
-what ipos/block is set to when calling trace_ray.
-
 rather than a single iteration be checking blocks e.g., [a-1,b-1,c] , [a-1,b,c] , [a,b,c]
 it should check [a-1,b-1,c-1] , [a-1,b-1,c] , [a-1,b,c] that way it's always checking blocks
 at the same 'a' value in the same iteration. then there needs to be some special logic for
@@ -30,3 +23,7 @@ TO-DO shader:
 Plans:
  - Configurable terrain generation function at any LOD
  - Sub-voxels
+
+
+For debugging: use qrenderdoc
+For profiling GPU: use Nsight graphics (ngfx-ui), usually have to launch as root to use GPU trace profiler

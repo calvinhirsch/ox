@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::world::loader::{ChunkLoadQueueItem, LayerChunk};
 use crate::world::mem_grid::utils::{amod, cubed, index_for_pos, pos_for_index};
 use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
@@ -72,18 +74,15 @@ impl<C, MD> MemoryGridLayer<C, MD> {
         pos: TlcPos<u32>,
         vgrid_size: usize,
     ) -> TlcPos<u32> {
-        let local_vgrid_pos = amod(
-            pos.0.cast::<i64>().unwrap() - self.metadata.offsets.0.cast::<i64>().unwrap(),
-            self.metadata.size,
-        )
-        .cast::<u32>()
-        .unwrap();
+        let local_vgrid_pos = (pos.0 + Vector3::from_value(self.metadata.size as u32)
+            - self.metadata.offsets.0.map(|o| o as u32))
+            % self.metadata.size as u32;
         TlcPos(
             local_vgrid_pos
-                + Vector3::<u32>::from_value(if self.metadata.size < vgrid_size {
+                + Vector3::from_value(if self.metadata.size < vgrid_size {
                     ((vgrid_size - self.metadata.size) / 2) as u32
                 } else {
-                    0
+                    0u32
                 }),
         )
     }
@@ -186,29 +185,36 @@ fn edit_grid_layer_with_size<
     grid_size: usize,
     edit_chunk_f: F,
 ) -> MemoryGridEditor<Option<CE>, &'a MemoryGridLayerMetadata<MD>> {
+    let start = Instant::now();
+
     let mut vgrid: Vec<Option<CE>> = (0..cubed(grid_size)).map(|_| None).collect();
+
+    dbg!(mem_grid.metadata().size);
+    dbg!(Instant::now() - start);
 
     // If this layer is smaller than full grid, add padding to virtual position so it
     // is centered
     let vgrid_positions: Vec<_> = (0..cubed(mem_grid.metadata().size))
         .map(|i| {
             mem_grid.virtual_grid_pos_for_grid_pos(
-                TlcPos(
-                    pos_for_index(i, mem_grid.metadata().size)
-                        .cast::<u32>()
-                        .unwrap(),
-                ),
+                TlcPos(pos_for_index(i, mem_grid.metadata().size).map(|a| a as u32)),
                 grid_size,
             )
         })
         .collect();
 
+    dbg!(Instant::now() - start);
+
     let start_tlc = mem_grid.metadata().start_tlc;
     let metadata = &mem_grid.metadata;
+
+    dbg!(Instant::now() - start);
 
     for (chunk_data, vgrid_pos) in mem_grid.chunks.iter_mut().zip(vgrid_positions) {
         vgrid[index_for_pos(vgrid_pos.0, grid_size)] = Some(edit_chunk_f(chunk_data, metadata));
     }
+
+    dbg!(Instant::now() - start);
 
     MemoryGridEditor {
         chunks: vgrid,

@@ -289,9 +289,6 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
         first_lod.set_voxel(index, voxel_typ);
         let first_lod: LODLayerDataWithVoxelIDs = first_lod.into();
 
-        dbg!("set_voxel");
-        dbg!(pos);
-
         for lod in iter.filter_map(|x| x.as_mut()) {
             let (lvl, sublvl) = (lod.lvl(), lod.sublvl());
             let lod_pos = VoxelPosInLod {
@@ -300,7 +297,6 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
                 sublvl: 0,
             }
             .in_other_lod(lvl, sublvl, meta.chunk_size);
-            dbg!(lvl, sublvl, &lod_pos);
             lod.data_mut()
                 .get_mut()
                 .unwrap()

@@ -12,6 +12,7 @@ pub struct BlockTypeAttrs {
 pub enum Block {
     Air,
     Debug,
+    Grass,
     Dirt,
     Mirror,
     RedLight,
@@ -41,6 +42,14 @@ impl VoxelTypeEnum for Block {
                 },
                 is_visible: true,
                 attributes: BlockTypeAttrs { dollars: 0 },
+            },
+            Grass => VoxelTypeDefinition {
+                material: Material {
+                    color: [0.0745, 0.42747, 0.08235],
+                    ..Default::default()
+                },
+                is_visible: true,
+                attributes: BlockTypeAttrs { dollars: 3 },
             },
             Dirt => VoxelTypeDefinition {
                 material: Material {

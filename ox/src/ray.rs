@@ -78,10 +78,6 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
         },
     };
 
-    dbg!(tlc);
-    dbg!(pos);
-    dbg!(ipos);
-
     // ENHANCEMENT: a bunch of this gets repeated when called from cast_ray
 
     let ray_dir = ray_dir.normalize();
@@ -153,7 +149,6 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
     };
 
     let vox_idx = |ipos: Point3<i32>| {
-        dbg!("ipos to check", &ipos);
         VoxelPosInLod::in_full_lod(VoxelPos(ipos_xyz(ipos).cast::<u32>().unwrap()))
             .index(chunk_size, largest_chunk_lvl)
     };
@@ -174,7 +169,6 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
 
     let mut i = 0;
     loop {
-        dbg!(ipos);
         // At each iteration of this traversal loop, ipos is
         // the integer position of the block the ray has just come into contact with. This
         // means that if the ray direction is negative, the ipos coordinate will be equal to
@@ -279,8 +273,6 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
             pos[ax_abc] = target_pos as f32;
             ipos = pos.map(|a| a.floor() as i32);
             ipos[ax_abc] = target_pos;
-
-            dbg!("oob", ax_abc);
 
             Ok(CastRayInTlcResult::Miss(RayPos {
                 tlc: new_tlc,

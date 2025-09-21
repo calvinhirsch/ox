@@ -5,7 +5,7 @@ use mem_grid::{MemGridShift, MemoryGridEditorChunk, ShiftGridAxis, ShiftGridAxis
 use num_traits::Zero;
 use std::marker::PhantomData;
 use std::mem;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub mod camera;
 pub mod loader;
@@ -99,14 +99,7 @@ impl<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>>
     }
 
     pub fn move_camera(&mut self, camera_controller: &mut impl CameraController, dt: Duration) {
-        let last_pos = self.camera.pos().0;
         camera_controller.apply(&mut self.camera, dt);
-
-        println!(
-            "last pos: {:?}, curr pos: {:?}",
-            last_pos,
-            self.camera.pos().0
-        );
 
         // Delta in units of top level chunks; 0 if still in the same TLC
         let tlc_delta = (self.camera.position.0 / (self.metadata.tlc_size as f32))

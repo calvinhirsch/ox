@@ -45,7 +45,7 @@ use crate::world::{
 };
 use world::{BorrowedWorldChunkEditor, CHUNK_SIZE};
 
-pub const CAMERA_SPEED: f32 = 10.;
+pub const CAMERA_SPEED: f32 = 40.;
 pub const CAMERA_SENS: f32 = 1.;
 
 const N_LODS: usize = 5;
@@ -109,7 +109,7 @@ fn main() {
                 voxel_resolution: 1,
                 lvl: 0,
                 sublvl: 0,
-                render_area_size: 1,
+                render_area_size: 3,
                 bitmask_binding: 8,
                 voxel_ids_binding: Some(4),
             },
@@ -117,7 +117,7 @@ fn main() {
                 voxel_resolution: 2,
                 lvl: 0,
                 sublvl: 1,
-                render_area_size: 3,
+                render_area_size: 7,
                 bitmask_binding: 9,
                 voxel_ids_binding: Some(5),
             },
@@ -125,7 +125,7 @@ fn main() {
                 voxel_resolution: 4,
                 lvl: 0,
                 sublvl: 2,
-                render_area_size: 7,
+                render_area_size: 15,
                 bitmask_binding: 10,
                 voxel_ids_binding: Some(6),
             },
@@ -133,7 +133,7 @@ fn main() {
                 voxel_resolution: 8,
                 lvl: 1,
                 sublvl: 0,
-                render_area_size: 15,
+                render_area_size: 31,
                 bitmask_binding: 11,
                 voxel_ids_binding: Some(7),
             },
@@ -141,7 +141,7 @@ fn main() {
                 voxel_resolution: 64,
                 lvl: 2,
                 sublvl: 0,
-                render_area_size: 15,
+                render_area_size: 31,
                 bitmask_binding: 12,
                 voxel_ids_binding: None,
             },
@@ -224,7 +224,7 @@ fn main() {
             WorldChunkLoadQueueItemData<N_LODS>,
             WorldEditorMetadata,
             BorrowedWorldChunkEditor<N_LODS>,
-        >::new(ChunkLoaderParams { n_threads: 5 }),
+        >::new(ChunkLoaderParams { n_threads: 8 }),
         Camera::new(tlc_size, mem_grid_size),
         tlc_size,
         16,
@@ -253,18 +253,15 @@ fn main() {
                 event: DeviceEvent::Button { button, state },
                 ..
             } => match state {
-                ElementState::Pressed => {
-                    dbg!(button);
-                    match button {
-                        1 => {
-                            left_clicked = true;
-                        }
-                        3 => {
-                            right_clicked = true;
-                        }
-                        _ => {}
+                ElementState::Pressed => match button {
+                    1 => {
+                        left_clicked = true;
                     }
-                }
+                    3 => {
+                        right_clicked = true;
+                    }
+                    _ => {}
+                },
                 _ => {}
             },
             Event::WindowEvent { event, .. } => match event {
@@ -298,18 +295,21 @@ fn main() {
                     window_resized = false;
                 }
 
-                let now = Instant::now();
-                let dt = now - last_render_time;
-                last_render_time = now;
+                let frame_start = Instant::now();
+                let dt = frame_start - last_render_time;
+                dbg!(dt);
+                last_render_time = frame_start;
 
                 // World update
-                dbg!(world.metadata().buffer_chunk_states());
                 world.move_camera(&mut camera_controller, dt); // can only be done before or after editing, not during
+                dbg!(Instant::now() - frame_start);
 
                 let camera_pos = world.camera().clone();
 
                 world.edit::<WorldChunkEditor<N_LODS>, _, _>(
                     |mut editor| {
+                        dbg!(Instant::now() - frame_start);
+
                         println!(
                             "Valid chunks: {:.2}%",
                             editor
@@ -321,23 +321,6 @@ fn main() {
                                 * 100.0
                                 / editor.mem_grid.chunks.len() as f32,
                         );
-
-                        // let pos = GlobalVoxelPos::new(
-                        //     VoxelPos(Point3 {
-                        //         x: 50,
-                        //         y: 50,
-                        //         z: 50,
-                        //     }),
-                        //     CHUNK_SIZE,
-                        //     LARGEST_CHUNK_LVL,
-                        // );
-                        // let meta = editor.mem_grid.metadata().clone();
-                        // let chunk = editor.mem_grid.chunk_mut(pos).unwrap();
-                        // if chunk.voxel.no_missing_lods() {
-                        //     chunk
-                        //         .voxel
-                        //         .set_voxel(pos.voxel_index, Block::DIRT, &meta.voxel);
-                        // }
 
                         if left_clicked || right_clicked {
                             let meta = editor.mem_grid.metadata().voxel.clone();
@@ -354,7 +337,6 @@ fn main() {
                                     tlc,
                                     face,
                                 })) => {
-                                    dbg!(pos, index, tlc);
                                     if left_clicked {
                                         let _ = editor
                                             .mem_grid
@@ -402,6 +384,8 @@ fn main() {
                     &load_chunk,
                 );
 
+                dbg!(Instant::now() - frame_start);
+
                 // Apply updates to staging buffers through the renderer
                 {
                     let render_editor = renderer.start_updating_staging_buffers();
@@ -409,16 +393,19 @@ fn main() {
                         .component_set
                         .camera
                         .update_staging_buffer(world.camera());
+                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .voxel_data
                         .update_staging_buffers_and_prep_copy(world.mem_grid.voxel.get_updates());
+                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .ubo
                         .buffer_scheme
                         .write_staging()
-                        .time = (now.duration_since(start_time).as_micros() / 100) as u32;
+                        .time = (frame_start.duration_since(start_time).as_micros() / 100) as u32;
+                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .ubo
@@ -431,8 +418,10 @@ fn main() {
                             world.mem_grid.voxel.start_tlc().0.z as i32,
                         ]);
                 }
+                dbg!(Instant::now() - frame_start);
 
                 renderer.draw_frame();
+                dbg!(Instant::now() - frame_start);
                 world.chunk_loader().print_status();
 
                 left_clicked = false;
