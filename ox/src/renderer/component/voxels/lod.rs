@@ -13,13 +13,13 @@ use vulkano::memory::allocator::MemoryAllocator;
 #[derive(Debug, Clone)]
 pub struct VoxelIDUpdate<'a> {
     pub ids: &'a [VoxelTypeIDs],
-    pub updated_regions: Vec<BufferCopy>,
+    pub updated_region: BufferCopy,
 }
 
 #[derive(Debug, Clone)]
 pub struct VoxelLODUpdate<'a> {
     pub bitmask: &'a [VoxelBitmask],
-    pub bitmask_updated_regions: Vec<BufferCopy>,
+    pub bitmask_updated_region: BufferCopy,
     pub id_update: Option<VoxelIDUpdate<'a>>,
 }
 

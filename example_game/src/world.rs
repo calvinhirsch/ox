@@ -254,10 +254,8 @@ pub fn load_chunk<const N: usize>(
             chunk.pos,
             chunk.data.voxel.unwrap().lods,
             generate_chunk,
-            metadata.voxel.chunk_size(),
-            metadata.voxel.tlc_size(),
-            metadata.voxel.largest_lod().lvl(),
-            metadata.voxel.lod_block_fill_thresh(),
+            CHUNK_SIZE,
+            &metadata.voxel,
         );
     }
     if let Some(e) = editor.entity.as_mut() {

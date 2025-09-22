@@ -1,7 +1,6 @@
-use crate::world::mem_grid::utils::index_for_pos;
-use crate::world::mem_grid::MemoryGridEditor;
-use crate::world::{BufferChunkState, TlcPos};
-use cgmath::{Array, EuclideanSpace, MetricSpace, Vector3};
+use crate::world::mem_grid::{GetMetadata, MemoryGrid, MemoryGridChunkEditor};
+use crate::world::{BufferChunkState, TlcPos, TlcVector};
+use cgmath::{Array, EuclideanSpace, MetricSpace, Point3, Vector3};
 use getset::{CopyGetters, Getters};
 use priority_queue::PriorityQueue;
 use std::hash::{Hash, Hasher};
@@ -184,34 +183,42 @@ pub struct ChunkLoaderParams {
     pub n_threads: usize,
 }
 
-fn vgrid_index(
+fn vgrid_pos(
     start_tlc: TlcPos<i64>,
     grid_size: usize,
     buffer_chunk_states: &[BufferChunkState; 3],
     pos: TlcPos<i64>,
-) -> Option<usize> {
-    let mut pt = pos.0 - start_tlc.0.to_vec();
-
-    // If position is outside vgrid, it may be a buffer chunk. Check if it is, and if not, return None
-    for c in [0, 1, 2] {
-        if pt[c] < 0 {
-            if pt[c] == -1 && buffer_chunk_states[c] == BufferChunkState::LoadedLower {
-                pt[c] = grid_size as i64 - 1;
-            } else {
-                return None;
-            }
-        } else if pt[c] >= grid_size as i64 - 1 {
-            if pt[c] == grid_size as i64 - 1
-                && buffer_chunk_states[c] == BufferChunkState::LoadedUpper
-            {
-                pt[c] = grid_size as i64 - 1;
-            } else {
-                return None;
+) -> Option<TlcVector<usize>> {
+    let pt = pos.0 - start_tlc.0.to_vec();
+    let mut i = 0;
+    if let Point3 {
+        x: Some(x),
+        y: Some(y),
+        z: Some(z),
+    } = pt.map(|a| {
+        let state = buffer_chunk_states[i];
+        i += 1;
+        if a < 0 {
+            if a < 0 {
+                if a == -1 && state == BufferChunkState::LoadedLower {
+                    return Some(grid_size - 1);
+                } else {
+                    return None;
+                }
+            } else if a >= grid_size as i64 - 1 {
+                if a == grid_size as i64 - 1 && state == BufferChunkState::LoadedUpper {
+                    return Some(grid_size - 1);
+                } else {
+                    return None;
+                }
             }
         }
+        Some(a as usize)
+    }) {
+        Some(TlcVector(Vector3 { x, y, z }))
+    } else {
+        None
     }
-
-    Some(index_for_pos(pt.cast::<u32>()?, grid_size))
 }
 
 impl<QI: Eq, MD, BC: BorrowedChunk> ChunkLoader<QI, MD, BC> {
@@ -254,17 +261,18 @@ impl<
     > ChunkLoader<QI, MD, BC>
 {
     /// Queues new chunks for loading and puts loaded chunks back in memory grid using editor.
-    pub fn sync<
-        CE: BorrowChunkForLoading<BC>,
-        F: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
-    >(
+    pub fn sync<CE, MG, F>(
         &mut self,
         start_tlc: TlcPos<i64>,
-        editor: &mut MemoryGridEditor<CE, MD>,
+        grid: &mut MG,
         queue: Vec<ChunkLoadQueueItem<QI>>,
         buffer_chunk_states: &[BufferChunkState; 3],
         load: &'static F,
-    ) {
+    ) where
+        CE: BorrowChunkForLoading<BC> + for<'e> MemoryGridChunkEditor<'e, MG>,
+        MG: MemoryGrid + GetMetadata<MD>,
+        F: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
+    {
         self.queued_last = 0;
         self.started_loading_last = 0;
         self.skipped_loading_last = 0;
@@ -278,8 +286,9 @@ impl<
                         self.finished_loading_last += 1;
                         unsafe {
                             chunk_data.mark_valid();
-                        };
+                        }
                         *thread_slot = None;
+                        todo!("add region to updated bitmask regions for this chunk");
                     }
                     Err(TryRecvError::Disconnected) => {
                         panic!("Thread disconnected before completing.")
@@ -289,7 +298,7 @@ impl<
             }
         }
 
-        let grid_size = editor.size;
+        let grid_size = grid.size();
         let priority = |chunk_pos: TlcPos<i64>| -> u32 {
             u32::MAX
                 - (Vector3::from_value(grid_size as f32 / 2.)
@@ -299,7 +308,7 @@ impl<
                     * grid_size as f32) as u32
         };
 
-        let editor_chunk_i = |pos| vgrid_index(start_tlc, grid_size, buffer_chunk_states, pos);
+        let chunk_vgrid_pos = |pos| vgrid_pos(start_tlc, grid_size, buffer_chunk_states, pos);
 
         // Add new items to queue
         for item in queue {
@@ -318,9 +327,9 @@ impl<
 
                     // Get index of current chunk. If this returns None, the chunk no longer is relevant
                     // and so we just skip loading it (it remains "invalid")
-                    if let Some(chunk_idx) = editor_chunk_i(item.pos) {
-                        let meta = editor.metadata().clone();
-                        let chunk = &mut editor.chunks[chunk_idx];
+                    if let Some(chunk_pos) = chunk_vgrid_pos(item.pos) {
+                        let meta = grid.metadata().clone();
+                        let mut chunk: CE = grid.edit_chunk(chunk_pos);
 
                         match chunk.mark_invalid() {
                             Ok(()) => {
@@ -362,167 +371,155 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use cgmath::Point3;
+    // use cgmath::Point3;
 
-    use crate::world::mem_grid::utils::cubed;
+    // use crate::world::mem_grid::utils::cubed;
 
-    use super::*;
+    // use super::*;
 
-    #[derive(Clone)]
-    struct TestChunkEditor(bool);
-    struct BorrowedTestChunkEditor(*mut bool);
+    // #[derive(Clone)]
+    // struct TestChunkEditor(bool);
+    // struct BorrowedTestChunkEditor(*mut bool);
 
-    unsafe impl BorrowChunkForLoading<BorrowedTestChunkEditor> for TestChunkEditor {
-        fn mark_invalid(&mut self) -> Result<(), ()> {
-            Ok(())
-        }
+    // unsafe impl BorrowChunkForLoading<BorrowedTestChunkEditor> for TestChunkEditor {
+    //     fn mark_invalid(&mut self) -> Result<(), ()> {
+    //         Ok(())
+    //     }
 
-        fn take_data_for_loading(
-            &mut self,
-            // chunk_qi: &ChunkLoadQueueItem<QI>,
-            // metadata: &MD,
-        ) -> BorrowedTestChunkEditor {
-            BorrowedTestChunkEditor(&mut self.0)
-        }
-    }
+    //     fn take_data_for_loading(
+    //         &mut self,
+    //         // chunk_qi: &ChunkLoadQueueItem<QI>,
+    //         // metadata: &MD,
+    //     ) -> BorrowedTestChunkEditor {
+    //         BorrowedTestChunkEditor(&mut self.0)
+    //     }
+    // }
 
-    unsafe impl Send for BorrowedTestChunkEditor {}
-    unsafe impl BorrowedChunk for BorrowedTestChunkEditor {
-        unsafe fn mark_valid(&mut self) {}
-    }
-
-    #[test]
-    fn test_load_all_with_buffers() {
-        let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
-
-        let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
-        let mem_grid_size = 16;
-        let mut mem_grid_editor = MemoryGridEditor::new(
-            vec![TestChunkEditor(false); cubed(mem_grid_size)],
-            mem_grid_size,
-            start_tlc,
-            (),
-        );
-
-        for x in -7..=8 {
-            for y in -7..=8 {
-                for z in -7..=8 {
-                    let pos = TlcPos(Point3 { x, y, z });
-                    loader.sync(
-                        start_tlc,
-                        &mut mem_grid_editor,
-                        vec![ChunkLoadQueueItem { data: (), pos: pos }],
-                        &[
-                            BufferChunkState::LoadedUpper,
-                            BufferChunkState::LoadedUpper,
-                            BufferChunkState::LoadedUpper,
-                        ],
-                        &|data, _, _| unsafe {
-                            assert!(!*data.0);
-                            *data.0 = true;
-                        },
-                    )
-                }
-            }
-        }
-
-        while loader.active_loading_threads() > 0 {
-            loader.sync(
-                start_tlc,
-                &mut mem_grid_editor,
-                vec![],
-                &[
-                    BufferChunkState::LoadedUpper,
-                    BufferChunkState::LoadedUpper,
-                    BufferChunkState::LoadedUpper,
-                ],
-                &|data, _, _| unsafe {
-                    assert!(!*data.0);
-                    *data.0 = true;
-                },
-            );
-            loader.print_status();
-        }
-
-        for chunk in mem_grid_editor.chunks.iter() {
-            assert!(chunk.0)
-        }
-    }
-
-    #[test]
-    fn test_load_all_without_buffers() {
-        let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
-
-        let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
-        let mem_grid_size = 16;
-        let mut mem_grid_editor = MemoryGridEditor::new(
-            vec![TestChunkEditor(false); cubed(mem_grid_size)],
-            mem_grid_size,
-            start_tlc,
-            (),
-        );
-
-        for x in -7..=7 {
-            for y in -7..=7 {
-                for z in -7..=7 {
-                    let pos = TlcPos(Point3 { x, y, z });
-                    loader.sync(
-                        start_tlc,
-                        &mut mem_grid_editor,
-                        vec![ChunkLoadQueueItem { data: (), pos: pos }],
-                        &[
-                            BufferChunkState::Unloaded,
-                            BufferChunkState::Unloaded,
-                            BufferChunkState::Unloaded,
-                        ],
-                        &|data, _, _| unsafe {
-                            assert!(!*data.0);
-                            *data.0 = true;
-                        },
-                    )
-                }
-            }
-        }
-
-        while loader.active_loading_threads() > 0 {
-            loader.sync(
-                start_tlc,
-                &mut mem_grid_editor,
-                vec![],
-                &[
-                    BufferChunkState::Unloaded,
-                    BufferChunkState::Unloaded,
-                    BufferChunkState::Unloaded,
-                ],
-                &|data, _, _| unsafe {
-                    assert!(!*data.0);
-                    *data.0 = true;
-                },
-            );
-            loader.print_status();
-        }
-
-        for x in 0..16 {
-            for y in 0..16 {
-                for z in 0..16 {
-                    let idx = x + y * 16 * 16 + z * 16;
-                    if x == 15 || y == 15 || z == 15 {
-                        assert!(!mem_grid_editor.chunks[idx].0);
-                    } else {
-                        assert!(mem_grid_editor.chunks[idx].0);
-                    }
-                }
-            }
-        }
-    }
+    // unsafe impl Send for BorrowedTestChunkEditor {}
+    // unsafe impl BorrowedChunk for BorrowedTestChunkEditor {
+    //     unsafe fn mark_valid(&mut self) {}
+    // }
 
     // #[test]
-    // fn test_indexing() {
-    //     for x in -7..=7 {
+    // fn test_load_all_with_buffers() {
+    //     let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
+
+    //     let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+    //     let mem_grid_size = 16;
+    //     let mut mem_grid_editor = MemoryGridEditor::new(
+    //         vec![TestChunkEditor(false); cubed(mem_grid_size)],
+    //         mem_grid_size,
+    //         start_tlc,
+    //         (),
+    //     );
+
+    //     for x in -7..=8 {
     //         for y in -7..=8 {
     //             for z in -7..=8 {
-    //                 let pos = TLCPos(Point3 { x, y, z });
-    //                 let index =
+    //                 let pos = TlcPos(Point3 { x, y, z });
+    //                 loader.sync(
+    //                     start_tlc,
+    //                     &mut mem_grid_editor,
+    //                     vec![ChunkLoadQueueItem { data: (), pos: pos }],
+    //                     &[
+    //                         BufferChunkState::LoadedUpper,
+    //                         BufferChunkState::LoadedUpper,
+    //                         BufferChunkState::LoadedUpper,
+    //                     ],
+    //                     &|data, _, _| unsafe {
+    //                         assert!(!*data.0);
+    //                         *data.0 = true;
+    //                     },
+    //                 )
+    //             }
+    //         }
+    //     }
+
+    //     while loader.active_loading_threads() > 0 {
+    //         loader.sync(
+    //             start_tlc,
+    //             &mut mem_grid_editor,
+    //             vec![],
+    //             &[
+    //                 BufferChunkState::LoadedUpper,
+    //                 BufferChunkState::LoadedUpper,
+    //                 BufferChunkState::LoadedUpper,
+    //             ],
+    //             &|data, _, _| unsafe {
+    //                 assert!(!*data.0);
+    //                 *data.0 = true;
+    //             },
+    //         );
+    //         loader.print_status();
+    //     }
+
+    //     for chunk in mem_grid_editor.chunks.iter() {
+    //         assert!(chunk.0)
+    //     }
+    // }
+
+    // #[test]
+    // fn test_load_all_without_buffers() {
+    //     let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
+
+    //     let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
+    //     let mem_grid_size = 16;
+    //     let mut mem_grid_editor = MemoryGridEditor::new(
+    //         vec![TestChunkEditor(false); cubed(mem_grid_size)],
+    //         mem_grid_size,
+    //         start_tlc,
+    //         (),
+    //     );
+
+    //     for x in -7..=7 {
+    //         for y in -7..=7 {
+    //             for z in -7..=7 {
+    //                 let pos = TlcPos(Point3 { x, y, z });
+    //                 loader.sync(
+    //                     start_tlc,
+    //                     &mut mem_grid_editor,
+    //                     vec![ChunkLoadQueueItem { data: (), pos: pos }],
+    //                     &[
+    //                         BufferChunkState::Unloaded,
+    //                         BufferChunkState::Unloaded,
+    //                         BufferChunkState::Unloaded,
+    //                     ],
+    //                     &|data, _, _| unsafe {
+    //                         assert!(!*data.0);
+    //                         *data.0 = true;
+    //                     },
+    //                 )
+    //             }
+    //         }
+    //     }
+
+    //     while loader.active_loading_threads() > 0 {
+    //         loader.sync(
+    //             start_tlc,
+    //             &mut mem_grid_editor,
+    //             vec![],
+    //             &[
+    //                 BufferChunkState::Unloaded,
+    //                 BufferChunkState::Unloaded,
+    //                 BufferChunkState::Unloaded,
+    //             ],
+    //             &|data, _, _| unsafe {
+    //                 assert!(!*data.0);
+    //                 *data.0 = true;
+    //             },
+    //         );
+    //         loader.print_status();
+    //     }
+
+    //     for x in 0..16 {
+    //         for y in 0..16 {
+    //             for z in 0..16 {
+    //                 let idx = x + y * 16 * 16 + z * 16;
+    //                 if x == 15 || y == 15 || z == 15 {
+    //                     assert!(!mem_grid_editor.chunks[idx].0);
+    //                 } else {
+    //                     assert!(mem_grid_editor.chunks[idx].0);
+    //                 }
     //             }
     //         }
     //     }

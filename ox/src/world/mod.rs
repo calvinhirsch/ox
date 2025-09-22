@@ -1,18 +1,18 @@
 use cgmath::{Array, Point3, Vector3};
 use getset::Getters;
 use loader::{BorrowChunkForLoading, BorrowedChunk};
-use mem_grid::{MemGridShift, MemoryGridEditorChunk, ShiftGridAxis, ShiftGridAxisVal};
+use mem_grid::{MemGridShift, ShiftGridAxis, ShiftGridAxisVal};
 use num_traits::Zero;
 use std::marker::PhantomData;
 use std::mem;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub mod camera;
 pub mod loader;
 pub mod mem_grid;
 
 use crate::world::loader::{ChunkLoadQueueItem, ChunkLoader};
-use crate::world::mem_grid::{MemoryGrid, MemoryGridEditor};
+use crate::world::mem_grid::{GetMetadata, MemoryGrid, MemoryGridChunkEditor};
 use camera::{controller::CameraController, Camera};
 
 /// Position in units of top level chunks
@@ -54,11 +54,6 @@ pub struct World<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueIte
     camera: Camera,
     #[get = "pub"]
     metadata: WorldMetadata,
-}
-
-pub struct WorldEditor<'a, CE, MD> {
-    pub mem_grid: MemoryGridEditor<CE, MD>,
-    pub metadata: &'a WorldMetadata,
 }
 
 /// Whether the buffer chunks for a specific axis are unloaded, have the upper (larger coordinate)
@@ -192,34 +187,50 @@ impl<
         QI: Clone + Send + Eq + std::fmt::Debug + 'static,
         BC: BorrowedChunk + 'static,
         MD: Clone + Send + 'static,
-        MG: MemoryGrid<ChunkLoadQueueItemData = QI>,
+        MG: MemoryGrid<ChunkLoadQueueItemData = QI> + GetMetadata<MD>,
     > World<QI, BC, MD, MG>
 {
-    pub fn edit<
-        'a,
-        CE: BorrowChunkForLoading<BC> + MemoryGridEditorChunk<'a, MG, MD>,
-        EF: FnOnce(WorldEditor<CE, MD>),
+    pub fn sync_chunk_loading<'a, CE, LF>(&mut self, load_f: &'static LF)
+    where
+        CE: BorrowChunkForLoading<BC> + for<'e> MemoryGridChunkEditor<'e, MG>,
         LF: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
-    >(
-        &'a mut self,
-        edit_f: EF,
-        load_f: &'static LF,
-    ) {
-        // Sync with chunk loader and queue new chunks to load
+    {
         let start_tlc = self.mem_grid.start_tlc();
         let chunks_to_load = mem::take(&mut self.chunks_to_load);
-        let mut mem_grid_editor = CE::edit_grid(&mut self.mem_grid);
-        self.chunk_loader.sync(
+        self.chunk_loader.sync::<CE, _, _>(
             start_tlc,
-            &mut mem_grid_editor,
+            &mut self.mem_grid,
             chunks_to_load,
             &self.metadata.buffer_chunk_states,
             load_f,
         );
-
-        edit_f(WorldEditor {
-            mem_grid: mem_grid_editor,
-            metadata: &self.metadata,
-        })
     }
+
+    // pub fn edit<
+    //     'a,
+    //     CE: BorrowChunkForLoading<BC> + MemoryGridEditorChunk<'a, MG, MD>,
+    //     EF: FnOnce(WorldEditor<CE, MD>),
+    //     LF: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
+    // >(
+    //     &'a mut self,
+    //     edit_f: EF,
+    //     load_f: &'static LF,
+    // ) {
+    //     // Sync with chunk loader and queue new chunks to load
+    //     let start_tlc = self.mem_grid.start_tlc();
+    //     let chunks_to_load = mem::take(&mut self.chunks_to_load);
+    //     let mut mem_grid_editor = CE::edit_grid(&mut self.mem_grid);
+    //     self.chunk_loader.sync(
+    //         start_tlc,
+    //         &mut mem_grid_editor,
+    //         chunks_to_load,
+    //         &self.metadata.buffer_chunk_states,
+    //         load_f,
+    //     );
+
+    //     edit_f(WorldEditor {
+    //         mem_grid: mem_grid_editor,
+    //         metadata: &self.metadata,
+    //     })
+    // }
 }

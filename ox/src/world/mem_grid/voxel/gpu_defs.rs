@@ -1,6 +1,5 @@
 use crate::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use std::ops::{Index, IndexMut};
-use vulkano::command_buffer::BufferCopy;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChunkVoxels {
@@ -74,15 +73,5 @@ impl ChunkBitmask {
     pub fn set_block_false(&mut self, index: usize) {
         let bit = 1u128 << (index % 128);
         self.bitmask[index / 128].mask &= !bit;
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ChunkUpdateRegions {
-    pub regions: Vec<BufferCopy>,
-}
-impl ChunkUpdateRegions {
-    pub fn new() -> Self {
-        ChunkUpdateRegions { regions: vec![] }
     }
 }
