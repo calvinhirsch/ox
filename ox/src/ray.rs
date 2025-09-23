@@ -7,7 +7,7 @@ use crate::{
         mem_grid::{
             utils::{ChunkSize, VoxelPosInLod},
             voxel::grid::ChunkVoxelEditor,
-            MemoryGridEditor,
+            MemoryGrid, MemoryGridChunkEditor,
         },
         TlcPos, VoxelPos, VoxelVector,
     },
@@ -57,8 +57,8 @@ pub enum CastRayInTlcResult {
 
 const TRAVERSAL_SAFETY_LIMIT: u32 = 10_000;
 
-pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<VE, N>, MD>(
-    editor: &mut MemoryGridEditor<CE, MD>,
+pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
+    editor: &ChunkVoxelEditor<VE, N>,
     RayPos {
         tlc,
         pos,
@@ -69,8 +69,7 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<
     chunk_size: ChunkSize,
     largest_chunk_lvl: u8,
 ) -> Result<CastRayInTlcResult, ()> {
-    let chunk_editor = editor.chunk(tlc).unwrap().voxels();
-    let chunk_voxels = match &chunk_editor.lods()[0] {
+    let chunk_voxels = match &editor.lods()[0] {
         None => return Ok(CastRayInTlcResult::OutOfArea),
         Some(lod) => match lod.data().get() {
             None => return Err(()),
@@ -352,8 +351,14 @@ pub enum CastRayResult {
 /// Cast a ray and get the first block it intersects. Operates only at LOD 0.
 /// Error return means the ray entered an unloaded chunk. Assumes that the
 /// starting TLC is the center one.
-pub fn cast_ray<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<VE, N>, MD>(
-    editor: &mut MemoryGridEditor<CE, MD>,
+pub fn cast_ray<
+    VE: VoxelTypeEnum,
+    const N: usize,
+    CE: ChunkEditorVoxels<VE, N> + for<'e> MemoryGridChunkEditor<'e, MG>,
+    MD,
+    MG: MemoryGrid,
+>(
+    grid: &mut MG,
     // position relative to the bottom corner of the memory grid
     start_pos: VoxelPos<f32>,
     ray_dir: Vector3<f32>,
@@ -364,16 +369,22 @@ pub fn cast_ray<VE: VoxelTypeEnum, const N: usize, CE: ChunkEditorVoxels<VE, N>,
     // When we trace the ray, if it goes outisde that, we need to switch chunks
 
     let tlc_size = chunk_size.size().pow(largest_chunk_lvl as u32) as i32;
-    let pos = start_pos.0 - Vector3::from_value((tlc_size as usize * (editor.size / 2 - 1)) as f32);
+    let pos = start_pos.0 - Vector3::from_value((tlc_size as usize * (grid.size() / 2 - 1)) as f32);
     let mut ray_pos = RayPos {
         pos,
         ipos: pos.map(|a| a.floor() as i32),
-        tlc: editor.center_chunk_pos(),
+        tlc: grid.center_chunk_pos(),
         last_crossed_ax: None,
     };
 
     for _ in 0..=1 {
-        match cast_ray_in_tlc(editor, ray_pos, ray_dir, chunk_size, largest_chunk_lvl)? {
+        match cast_ray_in_tlc(
+            grid.edit_chunk::<CE>(ray_pos.tlc).unwrap().voxels(),
+            ray_pos,
+            ray_dir,
+            chunk_size,
+            largest_chunk_lvl,
+        )? {
             CastRayInTlcResult::Hit(intersect) => return Ok(CastRayResult::Hit(intersect)),
             CastRayInTlcResult::Miss(pos) => {
                 ray_pos = pos;

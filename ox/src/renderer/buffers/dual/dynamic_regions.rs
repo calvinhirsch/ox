@@ -53,28 +53,23 @@ impl<T: BufferContents> BufferScheme for DualBufferWithDynamicCopyRegions<T> {
 impl<T: BufferContents + Copy + std::fmt::Debug> DualBufferWithDynamicCopyRegions<T> {
     /// Update staging buffers from `src` based on `regions` and add `regions` to `self.copy_regions`
     /// so that those regions are later transferred to the GPU.
-    pub fn update_staging_buffer_and_prep_copy(
-        &mut self,
-        src: &[T],
-        regions: impl IntoIterator<Item = BufferCopy>, // regions to copy from src to staging buffer
-    ) {
+    pub fn update_staging_buffer_and_prep_copy(&mut self, src: &[T], region: BufferCopy) {
         // Regions here are in bytes, so we need to rescale them to be indices
         let mut bitmask_write = self.staging.write().unwrap();
-        for region in regions {
-            // copy from src to staging buffer
-            let src_offset = region.src_offset as usize / size_of::<T>();
-            let dst_offset = region.dst_offset as usize / size_of::<T>();
-            let size = max(1, (region.size as usize) / size_of::<T>());
-            bitmask_write[dst_offset..dst_offset + size]
-                .copy_from_slice(&src[src_offset..src_offset + size]);
 
-            // queue copy from staging buffer to GPU
-            self.copy_regions.push(BufferCopy {
-                src_offset: region.dst_offset as u64,
-                dst_offset: region.dst_offset as u64, // staging buffer should be same as device local buffer
-                size: region.size as u64,
-                ..Default::default()
-            });
-        }
+        // copy from src to staging buffer
+        let src_offset = region.src_offset as usize / size_of::<T>();
+        let dst_offset = region.dst_offset as usize / size_of::<T>();
+        let size = max(1, (region.size as usize) / size_of::<T>());
+        bitmask_write[dst_offset..dst_offset + size]
+            .copy_from_slice(&src[src_offset..src_offset + size]);
+
+        // queue copy from staging buffer to GPU
+        self.copy_regions.push(BufferCopy {
+            src_offset: region.dst_offset as u64,
+            dst_offset: region.dst_offset as u64, // staging buffer should be same as device local buffer
+            size: region.size as u64,
+            ..Default::default()
+        });
     }
 }

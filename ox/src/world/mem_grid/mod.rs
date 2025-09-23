@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::world::TlcPos;
 use crate::world::{loader::ChunkLoadQueueItem, TlcVector};
-use cgmath::{EuclideanSpace, Point3, Vector3};
+use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use derive_new::new;
 use getset::CopyGetters;
 
@@ -212,11 +212,35 @@ pub trait MemoryGrid: Sized {
 
     fn start_tlc(&self) -> TlcPos<i64>;
 
-    fn edit_chunk<'s: 'e, 'e, CE: MemoryGridChunkEditor<'e, Self>>(
-        &'s mut self,
-        pos: TlcVector<usize>,
+    fn edit_chunk_at_grid_pos<'s: 'e, 'e, CE: MemoryGridChunkEditor<'e, Self>>(
+        &'e mut self,
+        grid_pos: TlcVector<usize>,
     ) -> CE {
-        CE::edit_chunk_for_size(self, self.size(), pos)
+        CE::edit_chunk_for_size(self, self.size(), grid_pos)
+    }
+
+    fn chunk_grid_pos_in(
+        global_tlc_pos: TlcPos<i64>,
+        grid_start_tlc: TlcPos<i64>,
+    ) -> Option<TlcVector<usize>> {
+        (global_tlc_pos.0 - grid_start_tlc.0.to_vec())
+            .cast::<usize>()
+            .map(|v| TlcVector(v.to_vec()))
+    }
+
+    fn chunk_grid_pos(&self, global_tlc_pos: TlcPos<i64>) -> Option<TlcVector<usize>> {
+        Self::chunk_grid_pos_in(global_tlc_pos, self.start_tlc())
+    }
+
+    fn edit_chunk<'s: 'e, 'e, CE: MemoryGridChunkEditor<'e, Self>>(
+        &'e mut self,
+        global_tlc_pos: TlcPos<i64>,
+    ) -> Option<CE> {
+        Some(self.edit_chunk_at_grid_pos::<CE>(self.chunk_grid_pos(global_tlc_pos)?))
+    }
+
+    fn center_chunk_pos(&self) -> TlcPos<i64> {
+        TlcPos(self.start_tlc().0 + Vector3::from_value(self.size() as i64 / 2 - 1))
     }
 }
 
@@ -229,5 +253,5 @@ pub trait MemoryGridChunkEditor<'a, MG: MemoryGrid>: Sized {
 }
 
 pub trait ChunkEditor<C, MD, S> {
-    fn edit(chunk: C, metadata: MD, state: S, pos: TlcVector<usize>) -> Self;
+    fn edit(chunk: C, metadata: MD, state: S, chunk_idx: usize) -> Self;
 }

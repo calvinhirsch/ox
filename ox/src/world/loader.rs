@@ -329,7 +329,7 @@ impl<
                     // and so we just skip loading it (it remains "invalid")
                     if let Some(chunk_pos) = chunk_vgrid_pos(item.pos) {
                         let meta = grid.metadata().clone();
-                        let mut chunk: CE = grid.edit_chunk(chunk_pos);
+                        let mut chunk: CE = grid.edit_chunk_at_grid_pos(chunk_pos);
 
                         match chunk.mark_invalid() {
                             Ok(()) => {

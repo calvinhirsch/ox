@@ -57,7 +57,7 @@ impl<C, MD, S> MemoryGridLayer<C, MD, S> {
     }
 
     pub fn chunks_and_state_mut(&mut self) -> (&mut Vec<LayerChunk<C>>, &mut S) {
-        (self.chunks, self.state)
+        (&mut self.chunks, &mut self.state)
     }
 
     pub fn calc_offsets(start_tlc: TlcPos<i64>, size: usize) -> Vector3<usize> {
@@ -164,14 +164,15 @@ impl<
         grid_size: usize,
         pos: TlcVector<usize>,
     ) -> Self {
-        let pos = mem_grid.grid_pos_for_virtual_grid_pos(pos, grid_size);
+        let physical_pos = mem_grid.grid_pos_for_virtual_grid_pos(pos, grid_size);
         let physical_grid_size = *mem_grid.metadata().size();
+        let chunk_idx = index_for_pos(
+            Point3::from_vec(physical_pos.0.map(|a| a as u32)),
+            physical_grid_size,
+        );
         mem_grid
             .chunks
-            .get_mut(index_for_pos(
-                Point3::from_vec(pos.0.map(|a| a as u32)),
-                physical_grid_size,
-            ))
-            .map(|c| CE::edit(c, &mem_grid.metadata, &mut mem_grid.state))
+            .get_mut(chunk_idx)
+            .map(|c| CE::edit(c, &mem_grid.metadata, &mut mem_grid.state, chunk_idx))
     }
 }

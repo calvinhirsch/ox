@@ -1,5 +1,5 @@
 use crate::renderer::component::voxels::data::VoxelTypeIDs;
-use crate::renderer::component::voxels::lod::{RendererVoxelLOD, UpdateRegion};
+use crate::renderer::component::voxels::lod::RendererVoxelLOD;
 use crate::renderer::component::voxels::lod::{VoxelIDUpdate, VoxelLODUpdate};
 use crate::voxel_type::VoxelTypeEnum;
 use crate::world::loader::LayerChunk;
@@ -15,7 +15,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use vulkano::command_buffer::BufferCopy;
 use vulkano::memory::allocator::MemoryAllocator;
-use vulkano::DeviceSize;
 
 use super::grid::lod_tlc_size;
 
@@ -71,7 +70,6 @@ pub struct LodChunkDataWithVoxelsMut<'a> {
 }
 
 pub type VoxelMemoryGridLod = MemoryGridLayer<LodChunkData, LodMetadata, LodState>;
-
 
 #[derive(Debug, Clone)]
 pub struct UpdateRegion {
@@ -157,16 +155,20 @@ impl VoxelMemoryGridLod {
     pub fn aggregate_updates(&mut self, clear_regions: bool) -> Vec<VoxelLODUpdate> {
         let voxels_per_tlc = self.metadata().extra().voxels_per_tlc;
         let (chunks, state) = self.chunks_and_state_mut();
-        let updates = state.updated_regions.iter().filter_map(|region|
-            chunks[region.chunk_idx].get_mut().map(|chunk|
-                VoxelLODUpdate {
-                    bitmask: chunk.bitmask,
+        let updates: Vec<VoxelLODUpdate> = state
+            .updated_regions
+            .iter()
+            .filter_map(|region| {
+                chunks[region.chunk_idx].get().map(|chunk| VoxelLODUpdate {
+                    bitmask: &chunk.bitmask.bitmask,
                     bitmask_updated_region: region.bitmask_copy_region(voxels_per_tlc),
-                    id_update: chunk.voxel_ids.as_ref().map(|ids| VoxelIDUpdate { ids: ids, updated_region: region.voxel_id_copy_region(voxels_per_tlc) })
-                }
-            )
-
-        );
+                    id_update: chunk.voxel_ids.as_ref().map(|ids| VoxelIDUpdate {
+                        ids: &ids.ids,
+                        updated_region: region.voxel_id_copy_region(voxels_per_tlc),
+                    }),
+                })
+            })
+            .collect();
 
         if clear_regions {
             state.updated_regions.clear();
@@ -174,6 +176,79 @@ impl VoxelMemoryGridLod {
 
         updates
     }
+}
+
+/// Does not save an update region for this update
+pub fn update_bitmask_bit_from_lower_lod_untracked(
+    bitmask: &mut ChunkBitmask,
+    voxel_pos: VoxelPosInLod,
+    voxel_index: usize,
+    lower_lod_bitmask: &ChunkBitmask,
+    lower_lvl: u8,
+    lower_sublvl: u8,
+    chunk_size: ChunkSize,
+    largest_chunk_lvl: u8,
+    block_fill_thresh: f32,
+) {
+    // Index of the lower corner of the 2x2x2 area in the lower LOD data we want to look at
+    let mut visible_count = 0;
+    let mut count = 0;
+
+    apply_to_voxel_indices_in_lower_lod(
+        voxel_pos,
+        voxel_index,
+        lower_lvl,
+        lower_sublvl,
+        chunk_size,
+        largest_chunk_lvl,
+        |idx| {
+            count += 1;
+
+            if lower_lod_bitmask.get(idx) {
+                visible_count += 1;
+            }
+        },
+    );
+
+    bitmask.set_block(
+        voxel_index,
+        visible_count as f32 > block_fill_thresh * count as f32,
+    );
+}
+
+/// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
+/// bitmask from a lower level. This should not be called when this LOD contains voxel ID data.
+pub fn update_bitmask_from_lower_lod_untracked(
+    bitmask: &mut ChunkBitmask,
+    lower_lod_bitmask: &ChunkBitmask,
+    curr_lvl: u8,
+    curr_sublvl: u8,
+    lower_lvl: u8,
+    lower_sublvl: u8,
+    chunk_size: ChunkSize,
+    largest_chunk_lvl: u8,
+    block_fill_thresh: f32,
+) {
+    apply_to_voxels_in_lod(
+        curr_lvl,
+        curr_sublvl,
+        chunk_size,
+        largest_chunk_lvl,
+        |voxel_pos| {
+            let voxel_index = voxel_pos.index(chunk_size, largest_chunk_lvl);
+            update_bitmask_bit_from_lower_lod_untracked(
+                bitmask,
+                voxel_pos,
+                voxel_index,
+                lower_lod_bitmask,
+                lower_lvl,
+                lower_sublvl,
+                chunk_size,
+                largest_chunk_lvl,
+                block_fill_thresh,
+            );
+        },
+    );
 }
 
 pub enum LodChunkDataVariant<'a> {
@@ -186,7 +261,7 @@ pub enum LodChunkDataVariantMut<'a> {
 }
 
 impl LodChunkData {
-    pub fn with_voxel_ids(&self) -> LodChunkDataVariant {
+    pub fn check_voxel_ids(&self) -> LodChunkDataVariant {
         match self.voxel_ids.as_ref() {
             Some(voxel_ids) => LodChunkDataVariant::WithVoxels(LodChunkDataWithVoxels {
                 bitmask: &self.bitmask,
@@ -196,7 +271,7 @@ impl LodChunkData {
         }
     }
 
-    pub fn with_voxel_ids_mut(&mut self) -> LodChunkDataVariantMut {
+    pub fn check_voxel_ids_mut(&mut self) -> LodChunkDataVariantMut {
         match self.voxel_ids.as_mut() {
             Some(voxel_ids) => LodChunkDataVariantMut::WithVoxels(LodChunkDataWithVoxelsMut {
                 bitmask: &mut self.bitmask,
@@ -205,79 +280,47 @@ impl LodChunkData {
             None => LodChunkDataVariantMut::WithoutVoxels(&mut self.bitmask),
         }
     }
+}
 
-    /// Does not save an update region for this update
-    pub fn update_bitmask_bit_from_lower_lod_untracked(
-        &mut self,
-        voxel_pos: VoxelPosInLod,
-        voxel_index: usize,
-        lower_lod: &LodChunkData,
-        lower_lvl: u8,
-        lower_sublvl: u8,
-        chunk_size: ChunkSize,
-        largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
-    ) {
-        debug_assert!(self.voxel_ids.is_none());
-        // Index of the lower corner of the 2x2x2 area in the lower LOD data we want to look at
-        let mut visible_count = 0;
-        let mut count = 0;
+#[derive(Debug)]
+pub struct UpdatedRegionsMut<'a> {
+    regions: &'a mut Vec<UpdateRegion>,
+    chunk_idx: usize,
+}
 
-        apply_to_voxel_indices_in_lower_lod(
-            voxel_pos,
-            voxel_index,
-            lower_lvl,
-            lower_sublvl,
-            chunk_size,
-            largest_chunk_lvl,
-            |idx| {
-                count += 1;
+// #[derive(Debug, Clone)]
+// pub struct UpdatedRegions<'a> {
+//     regions: &'a Vec<UpdateRegion>,
+//     chunk_idx: usize,
+// }
 
-                if lower_lod.bitmask.get(idx) {
-                    visible_count += 1;
-                }
-            },
-        );
-
-        self.bitmask.set_block(
-            voxel_index,
-            visible_count as f32 > block_fill_thresh * count as f32,
-        );
+impl<'a> UpdatedRegionsMut<'a> {
+    fn borrow_mut<'b>(&'b mut self) -> UpdatedRegionsMut<'b>
+    where
+        'a: 'b,
+    {
+        UpdatedRegionsMut {
+            regions: self.regions,
+            chunk_idx: self.chunk_idx,
+        }
     }
 
-    /// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
-    /// bitmask from a lower level. This should not be called when this LOD contains voxel ID data.
-    pub fn update_bitmask_from_lower_lod_untracked(
-        &mut self,
-        lower_lod: &LodChunkData,
-        curr_lvl: u8,
-        curr_sublvl: u8,
-        lower_lvl: u8,
-        lower_sublvl: u8,
-        chunk_size: ChunkSize,
-        largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
-    ) {
-        debug_assert!(self.voxel_ids.is_none());
-        apply_to_voxels_in_lod(
-            curr_lvl,
-            curr_sublvl,
-            chunk_size,
-            largest_chunk_lvl,
-            |voxel_pos| {
-                let voxel_index = voxel_pos.index(chunk_size, largest_chunk_lvl);
-                self.update_bitmask_bit_from_lower_lod_untracked(
-                    voxel_pos,
-                    voxel_index,
-                    lower_lod,
-                    lower_lvl,
-                    lower_sublvl,
-                    chunk_size,
-                    largest_chunk_lvl,
-                    block_fill_thresh,
-                );
-            },
-        );
+    // fn as_shared<'b>(&'b self) -> UpdatedRegions<'b>
+    // where
+    //     'a: 'b,
+    // {
+    //     UpdatedRegions {
+    //         regions: self.regions,
+    //         chunk_idx: self.chunk_idx,
+    //     }
+    // }
+
+    fn add_region(&mut self, voxel_idx: usize, n_voxels: usize) {
+        self.regions.push(UpdateRegion {
+            chunk_idx: self.chunk_idx,
+            voxel_idx,
+            n_voxels,
+        });
     }
 }
 
@@ -292,10 +335,15 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
         }
     }
 
+    /// Editing this will not track changes to update GPU.
+    pub fn raw_voxel_ids_mut(&mut self) -> &mut ChunkVoxels {
+        self.voxel_ids
+    }
+
     /// Recalculate LOD voxels from a lower LOD (i.e. a higher resolution LOD). Syncs entire buffer to GPU.
     pub fn update_from_lower_lod_voxels_untracked<VE: VoxelTypeEnum>(
         &mut self,
-        lower_lod: LodChunkEditorWithVoxels,
+        lower_lod: LodChunkDataWithVoxels,
         curr_lvl: u8,
         curr_sublvl: u8,
         lower_lvl: u8,
@@ -328,7 +376,7 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
 
     pub fn calc_voxel_from_lower_lod<VE: VoxelTypeEnum>(
         &mut self,
-        lower_lod: &LodChunkEditorWithVoxels,
+        lower_lod: &LodChunkDataWithVoxels,
         pos: VoxelPosInLod,
         index: usize,
         lower_lvl: u8,
@@ -351,13 +399,13 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
             |idx| {
                 count += 1;
                 debug_assert!(
-                    idx < lower_lod.data.voxel_ids.n_voxels(),
+                    idx < lower_lod.voxel_ids.n_voxels(),
                     "bad voxel index: lower_lod.voxel_ids[{}] for {}-{}",
                     idx,
                     lower_lvl,
                     lower_sublvl,
                 );
-                let id = lower_lod.data.voxel_ids[idx];
+                let id = lower_lod.voxel_ids[idx];
                 let vox_type = VE::from_u8(id).unwrap();
                 if vox_type.def().is_visible {
                     visible_count += 1;
@@ -392,9 +440,7 @@ pub struct LodChunkEditorMaybeUnloaded<'a, VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     #[getset(get = "pub", get_mut = "pub")]
     data: &'a mut LayerChunk<LodChunkData>,
-    #[get_copy = "pub"]
-    bitmask_buffer_offset: usize,
-    updated_regions: &'a mut Vec<BufferCopy>,
+    updated_regions: UpdatedRegionsMut<'a>,
     #[get_copy = "pub"]
     lvl: u8,
     #[get_copy = "pub"]
@@ -403,14 +449,14 @@ pub struct LodChunkEditorMaybeUnloaded<'a, VE: VoxelTypeEnum> {
 
 pub struct LodChunkEditor<'a> {
     data: &'a mut LodChunkData,
-    updated_regions: &'a mut Vec<BufferCopy>,
+    updated_regions: UpdatedRegionsMut<'a>,
 }
 
 impl<'a, VE: VoxelTypeEnum> LodChunkEditorMaybeUnloaded<'a, VE> {
-    pub fn as_loaded(&'a mut self) -> Option<LodChunkEditor<'a>> {
+    pub fn as_loaded<'b>(&'b mut self) -> Option<LodChunkEditor<'b>> {
         Some(LodChunkEditor {
             data: self.data.get_mut()?,
-            updated_regions: self.updated_regions,
+            updated_regions: self.updated_regions.borrow_mut(),
         })
     }
 }
@@ -426,14 +472,17 @@ impl<'a, VE: VoxelTypeEnum>
         chunk_data: &'a mut LayerChunk<LodChunkData>,
         metadata: &'a MemoryGridLayerMetadata<LodMetadata>,
         state: &'a mut LodState,
-        pos:
+        chunk_idx: usize,
     ) -> Self {
         LodChunkEditorMaybeUnloaded {
             voxel_type_enum: PhantomData,
             data: chunk_data,
             sublvl: metadata.extra().sublvl as u8,
             lvl: metadata.extra().lvl as u8,
-            updated_regions: &mut state.updated_regions,
+            updated_regions: UpdatedRegionsMut {
+                regions: &mut state.updated_regions,
+                chunk_idx,
+            },
         }
     }
 }
@@ -450,104 +499,31 @@ pub enum LodChunkEditorVariantMut<'a> {
 
 impl<'a> LodChunkEditor<'a> {
     pub fn with_voxel_ids(&self) -> LodChunkEditorVariant {
-        match self.data.with_voxel_ids() {
+        match self.data.check_voxel_ids() {
             LodChunkDataVariant::WithVoxels(data) => {
-                LodChunkEditorVariant::WithVoxels(LodChunkEditorWithVoxels {
-                    data,
-                    updated_regions: &self.updated_regions,
-                })
+                LodChunkEditorVariant::WithVoxels(LodChunkEditorWithVoxels { data })
             }
             LodChunkDataVariant::WithoutVoxels(data) => {
-                LodChunkEditorVariant::WithoutVoxels(LodChunkEditorWithoutVoxels {
-                    bitmask: data,
-                    updated_regions: &self.updated_regions,
-                })
+                LodChunkEditorVariant::WithoutVoxels(LodChunkEditorWithoutVoxels { bitmask: data })
             }
         }
     }
 
     pub fn with_voxel_ids_mut(&mut self) -> LodChunkEditorVariantMut {
-        match self.data.with_voxel_ids_mut() {
+        match self.data.check_voxel_ids_mut() {
             LodChunkDataVariantMut::WithVoxels(data) => {
                 LodChunkEditorVariantMut::WithVoxels(LodChunkEditorWithVoxelsMut {
                     data,
-                    updated_regions: &mut self.updated_regions,
+                    updated_regions: self.updated_regions.borrow_mut(),
                 })
             }
             LodChunkDataVariantMut::WithoutVoxels(data) => {
                 LodChunkEditorVariantMut::WithoutVoxels(LodChunkEditorWithoutVoxelsMut {
                     bitmask: data,
-                    updated_regions: &mut self.updated_regions,
+                    updated_regions: self.updated_regions.borrow_mut(),
                 })
             }
         }
-    }
-
-    fn add_updated_region(&mut self, voxel_idx: usize) {
-        let offset =
-        self.updated_regions.push(UpdateRegion { voxel_idx});
-        BufferCopy {
-            src_offset: (voxel_index / 8) as DeviceSize,
-            dst_offset: (voxel_index / 8) as DeviceSize,
-            size,
-            ..Default::default()
-        });
-    }
-
-    pub fn update_full_buffer_gpu(&mut self) {
-        todo!();
-    }
-
-    pub fn update_bitmask_bit_from_lower_lod(
-        &mut self,
-        voxel_pos: VoxelPosInLod,
-        voxel_index: usize,
-        lower_lod: &LodChunkData,
-        lower_lvl: u8,
-        lower_sublvl: u8,
-        chunk_size: ChunkSize,
-        largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
-    ) {
-        debug_assert!(self.data.voxel_ids.is_none());
-        self.data.update_bitmask_bit_from_lower_lod_untracked(
-            voxel_pos,
-            voxel_index,
-            lower_lod,
-            lower_lvl,
-            lower_sublvl,
-            chunk_size,
-            largest_chunk_lvl,
-            block_fill_thresh,
-        );
-        self.add_updated_region(voxel_index, 1);
-    }
-
-    /// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
-    /// bitmask from a lower level. This should not be called when this LOD contains voxel ID data.
-    pub fn update_bitmask_from_lower_lod(
-        &mut self,
-        lower_lod: &LodChunkData,
-        curr_lvl: u8,
-        curr_sublvl: u8,
-        lower_lvl: u8,
-        lower_sublvl: u8,
-        chunk_size: ChunkSize,
-        largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
-    ) {
-        debug_assert!(self.data.voxel_ids.is_none());
-        self.data.update_bitmask_from_lower_lod_untracked(
-            lower_lod,
-            curr_lvl,
-            curr_sublvl,
-            lower_lvl,
-            lower_sublvl,
-            chunk_size,
-            largest_chunk_lvl,
-            block_fill_thresh,
-        );
-        self.update_full_buffer_gpu();
     }
 
     /// Updates a voxel from a provided lower LOD. If this LOD has no voxel IDs and only a bitmask,
@@ -556,7 +532,7 @@ impl<'a> LodChunkEditor<'a> {
         &mut self,
         voxel_pos: VoxelPosInLod,
         voxel_index: usize,
-        lower_lod: &LodChunkEditorWithVoxels,
+        lower_lod: &LodChunkDataWithVoxels,
         lower_lvl: u8,
         lower_sublvl: u8,
         chunk_size: ChunkSize,
@@ -564,17 +540,7 @@ impl<'a> LodChunkEditor<'a> {
         block_fill_thresh: f32,
     ) {
         match self.with_voxel_ids_mut() {
-            None => self.update_bitmask_bit_from_lower_lod(
-                voxel_pos,
-                voxel_index,
-                lower_lod.0.data,
-                lower_lvl,
-                lower_sublvl,
-                chunk_size,
-                largest_chunk_lvl,
-                block_fill_thresh,
-            ),
-            Some(mut with_voxels) => with_voxels.update_voxel_from_lower_lod::<VE>(
+            LodChunkEditorVariantMut::WithVoxels(mut lod) => lod.update_voxel_from_lower_lod::<VE>(
                 lower_lod,
                 voxel_pos,
                 voxel_index,
@@ -584,25 +550,36 @@ impl<'a> LodChunkEditor<'a> {
                 largest_chunk_lvl,
                 block_fill_thresh,
             ),
+            LodChunkEditorVariantMut::WithoutVoxels(mut lod) => lod
+                .update_bitmask_bit_from_lower_lod(
+                    voxel_pos,
+                    voxel_index,
+                    lower_lod.bitmask,
+                    lower_lvl,
+                    lower_sublvl,
+                    chunk_size,
+                    largest_chunk_lvl,
+                    block_fill_thresh,
+                ),
         }
     }
 }
 
 pub struct LodChunkEditorWithVoxelsMut<'a> {
     data: LodChunkDataWithVoxelsMut<'a>,
-    updated_regions: &'a mut Vec<BufferCopy>,
+    updated_regions: UpdatedRegionsMut<'a>,
 }
 pub struct LodChunkEditorWithVoxels<'a> {
+    #[allow(dead_code)]
     data: LodChunkDataWithVoxels<'a>,
-    updated_regions: &'a Vec<BufferCopy>,
 }
 pub struct LodChunkEditorWithoutVoxelsMut<'a> {
     bitmask: &'a mut ChunkBitmask,
-    updated_regions: &'a mut Vec<BufferCopy>,
+    updated_regions: UpdatedRegionsMut<'a>,
 }
 pub struct LodChunkEditorWithoutVoxels<'a> {
+    #[allow(dead_code)]
     bitmask: &'a ChunkBitmask,
-    updated_regions: &'a Vec<BufferCopy>,
 }
 
 pub fn apply_to_voxels_in_lod<F: FnMut(VoxelPosInLod)>(
@@ -633,7 +610,17 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
     {
         LodChunkEditorWithVoxelsMut {
             data: self.data.borrow_mut(),
-            updated_regions: &mut self.updated_regions,
+            updated_regions: self.updated_regions.borrow_mut(),
+        }
+    }
+
+    pub fn data<'b>(&'b mut self) -> LodChunkDataWithVoxels<'b>
+    where
+        'a: 'b,
+    {
+        LodChunkDataWithVoxels {
+            bitmask: self.data.bitmask,
+            voxel_ids: self.data.voxel_ids,
         }
     }
 
@@ -653,11 +640,11 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
     /// Sets self.updated_regions to a single region covering the whole buffer so that it
     /// will be fully copied to the GPU.
     pub fn update_full_buffer_gpu(&mut self) {
-        *self.updated_regions = vec![BufferCopy {
-            src_offset: 0,
-            dst_offset: 0,
-            size: ((self.data.bitmask.n_voxels() + 7) / 8) as DeviceSize,
-            ..Default::default()
+        let chunk_idx = self.updated_regions.chunk_idx;
+        *self.updated_regions.regions = vec![UpdateRegion {
+            voxel_idx: 0,
+            chunk_idx,
+            n_voxels: self.data.bitmask.n_voxels(),
         }];
     }
 
@@ -667,18 +654,13 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
         self.data
             .bitmask
             .set_block(index, voxel_typ.def().is_visible);
-        self.updated_regions.push(BufferCopy {
-            src_offset: (index / 8) as DeviceSize,
-            dst_offset: (index / 8) as DeviceSize,
-            size: 1,
-            ..Default::default()
-        })
+        self.updated_regions.add_region(index, 1);
     }
 
     /// Recalculate LOD voxels from a lower LOD (i.e. a higher resolution LOD). Syncs entire buffer to GPU.
     pub fn update_from_lower_lod_voxels<VE: VoxelTypeEnum>(
         &mut self,
-        lower_lod: LodChunkEditorWithVoxels,
+        lower_lod: LodChunkDataWithVoxels,
         curr_lvl: u8,
         curr_sublvl: u8,
         lower_lvl: u8,
@@ -687,16 +669,22 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
         largest_chunk_lvl: u8,
         lod_block_fill_thresh: f32,
     ) {
-        self.data.calc_full_bitmask::<VE>(
-            self.data.voxel_ids.as_mut().unwrap(),
-            &mut self.data.bitmask,
+        self.data.update_from_lower_lod_voxels_untracked::<VE>(
+            lower_lod,
+            curr_lvl,
+            curr_sublvl,
+            lower_lvl,
+            lower_sublvl,
+            chunk_size,
+            largest_chunk_lvl,
+            lod_block_fill_thresh,
         );
         self.update_full_buffer_gpu();
     }
 
     pub fn update_voxel_from_lower_lod<VE: VoxelTypeEnum>(
         &mut self,
-        lower_lod: &LodChunkEditorWithVoxels,
+        lower_lod: &LodChunkDataWithVoxels,
         pos: VoxelPosInLod,
         index: usize,
         lower_lvl: u8,
@@ -716,6 +704,71 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
             lod_block_fill_thresh,
         );
         self.set_voxel(index, voxel_type.unwrap_or(VE::empty()));
+    }
+}
+
+impl<'a> LodChunkEditorWithoutVoxelsMut<'a> {
+    /// Sets self.updated_regions to a single region covering the whole buffer so that it
+    /// will be fully copied to the GPU.
+    pub fn update_full_buffer_gpu(&mut self) {
+        let chunk_idx = self.updated_regions.chunk_idx;
+        *self.updated_regions.regions = vec![UpdateRegion {
+            voxel_idx: 0,
+            chunk_idx,
+            n_voxels: self.bitmask.n_voxels(),
+        }];
+    }
+
+    pub fn update_bitmask_bit_from_lower_lod(
+        &mut self,
+        voxel_pos: VoxelPosInLod,
+        voxel_index: usize,
+        lower_lod_bitmask: &ChunkBitmask,
+        lower_lvl: u8,
+        lower_sublvl: u8,
+        chunk_size: ChunkSize,
+        largest_chunk_lvl: u8,
+        block_fill_thresh: f32,
+    ) {
+        update_bitmask_bit_from_lower_lod_untracked(
+            self.bitmask,
+            voxel_pos,
+            voxel_index,
+            lower_lod_bitmask,
+            lower_lvl,
+            lower_sublvl,
+            chunk_size,
+            largest_chunk_lvl,
+            block_fill_thresh,
+        );
+        self.updated_regions.add_region(voxel_index, 1);
+    }
+
+    /// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
+    /// bitmask from a lower level. This should not be called when this LOD contains voxel ID data.
+    pub fn update_bitmask_from_lower_lod(
+        &mut self,
+        lower_lod_bitmask: &ChunkBitmask,
+        curr_lvl: u8,
+        curr_sublvl: u8,
+        lower_lvl: u8,
+        lower_sublvl: u8,
+        chunk_size: ChunkSize,
+        largest_chunk_lvl: u8,
+        block_fill_thresh: f32,
+    ) {
+        update_bitmask_from_lower_lod_untracked(
+            self.bitmask,
+            lower_lod_bitmask,
+            curr_lvl,
+            curr_sublvl,
+            lower_lvl,
+            lower_sublvl,
+            chunk_size,
+            largest_chunk_lvl,
+            block_fill_thresh,
+        );
+        self.update_full_buffer_gpu();
     }
 }
 
@@ -826,7 +879,7 @@ pub struct BorrowedLodChunkEditorMaybeUnloaded<VE: VoxelTypeEnum> {
     #[getset(get_mut = "pub", get = "pub")]
     data: *mut LayerChunk<LodChunkData>,
     #[get_copy = "pub"]
-    bitmask_buffer_offset: usize,
+    chunk_idx: usize,
     #[get_copy = "pub"]
     lvl: u8,
     #[get_copy = "pub"]
@@ -838,16 +891,15 @@ impl<VE: VoxelTypeEnum> BorrowedLodChunkEditorMaybeUnloaded<VE> {
         LodChunkEditorMaybeUnloaded {
             voxel_type_enum: _,
             data,
-            bitmask_buffer_offset,
             lvl,
             sublvl,
-            updated_regions: _,
+            updated_regions,
         }: &mut LodChunkEditorMaybeUnloaded<VE>,
     ) -> Self {
         Self {
             voxel_type_enum: PhantomData,
             data: *data as *mut _,
-            bitmask_buffer_offset: *bitmask_buffer_offset,
+            chunk_idx: updated_regions.chunk_idx,
             lvl: *lvl,
             sublvl: *sublvl,
         }
@@ -865,23 +917,33 @@ impl<'a, VE: VoxelTypeEnum> Drop for LodChunkOverwriter<'a, VE> {
         calc_full_bitmask::<VE>(&self.editor.data.voxel_ids, &mut self.editor.data.bitmask);
     }
 }
-// {
-//     voxel_type_enum: PhantomData<VE>,
-//     pub voxel_ids: &'a mut ChunkVoxels,
-//     bitmask: &'a mut ChunkBitmask,
-//     updated_bitmask_regions: &'a mut Vec<BufferCopy>,
-// }
-// impl<'a, VE: VoxelTypeEnum> Drop for VoxelOverwriter<'a, VE> {
-//     fn drop(&mut self) {
-//         calc_full_bitmask::<VE>(self.voxel_ids, self.bitmask);
-//         self.updated_bitmask_regions.regions = vec![BufferCopy {
-//             src_offset: 0,
-//             dst_offset: 0,
-//             size: ((self.bitmask.n_voxels() + 7) / 8) as DeviceSize,
-//             ..Default::default()
-//         }];
-//     }
-// }
+
+impl UpdateRegion {
+    pub fn bitmask_copy_region(&self, voxels_per_tlc: usize) -> BufferCopy {
+        let voxel_offset = self.voxel_idx / 8;
+        BufferCopy {
+            src_offset: voxel_offset as u64,
+            dst_offset: (self.chunk_idx * voxels_per_tlc / 8 + voxel_offset) as u64,
+            size: (self.n_voxels / 8) as u64,
+            ..Default::default()
+        }
+    }
+
+    pub fn voxel_id_copy_region(&self, voxels_per_tlc: usize) -> BufferCopy {
+        let bytes_per_voxel = if voxels_per_tlc >= 128 {
+            VoxelTypeIDs::BITS_PER_VOXEL / 8
+        } else {
+            (voxels_per_tlc * VoxelTypeIDs::BITS_PER_VOXEL).max(128) / 8
+        };
+        BufferCopy {
+            src_offset: (self.voxel_idx * bytes_per_voxel) as u64,
+            dst_offset: ((self.chunk_idx * voxels_per_tlc + self.voxel_idx) * bytes_per_voxel)
+                as u64,
+            size: (self.n_voxels * bytes_per_voxel) as u64,
+            ..Default::default()
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -972,33 +1034,6 @@ mod tests {
 
         fn empty() -> Block {
             Block::AIR
-        }
-    }
-
-    impl UpdateRegion {
-        pub fn bitmask_copy_region(&self, voxels_per_tlc: usize) -> BufferCopy {
-            let voxel_offset = self.voxel_idx / 8;
-            BufferCopy {
-                src_offset: voxel_offset as u64,
-                dst_offset: (self.chunk_idx * voxels_per_tlc / 8 + voxel_offset) as u64,
-                size: (self.n_voxels / 8) as u64,
-                ..Default::default()
-            }
-        }
-
-        pub fn voxel_id_copy_region(&self, voxels_per_tlc: usize) -> BufferCopy {
-            let bytes_per_voxel = if voxels_per_tlc >= 128 {
-                VoxelTypeIDs::BITS_PER_VOXEL / 8
-            } else {
-                (voxels_per_tlc * VoxelTypeIDs::BITS_PER_VOXEL).max(128) / 8
-            };
-            BufferCopy {
-                src_offset: (self.voxel_idx * bytes_per_voxel) as u64,
-                dst_offset: ((self.chunk_idx * voxels_per_tlc + self.voxel_idx) * bytes_per_voxel)
-                    as u64,
-                size: (self.n_voxels * bytes_per_voxel) as u64,
-                ..Default::default()
-            }
         }
     }
 
