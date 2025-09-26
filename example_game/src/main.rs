@@ -1,4 +1,5 @@
 use cgmath::Point3;
+use ox::loader::{ChunkLoader, ChunkLoaderParams};
 use ox::ray::{cast_ray, CastRayResult, RayVoxelIntersect};
 use ox::renderer::component::camera::RendererCamera;
 use ox::renderer::component::materials::MaterialList;
@@ -11,7 +12,6 @@ use ox::renderer::utils::standard_one_time_transfer_builder;
 use ox::renderer::Renderer;
 use ox::voxel_type::VoxelTypeEnum;
 use ox::world::camera::controller::winit::WinitCameraController;
-use ox::world::loader::{ChunkLoader, ChunkLoaderParams};
 use ox::world::mem_grid::utils::VoxelPosInLod;
 use ox::world::mem_grid::voxel::grid::{
     global_voxel_pos_from_pos_in_tlc, voxel_pos_in_tlc_from_global_pos,
@@ -40,9 +40,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 mod blocks;
 use blocks::Block;
 mod world;
-use crate::world::{
-    load_chunk, WorldChunkEditor, WorldChunkLoadQueueItemData, WorldEditorMetadata, WorldMemoryGrid,
-};
+use crate::world::{load_chunk, WorldChunkLoadQueueItemData, WorldMemoryGrid};
 use world::{BorrowedWorldChunkEditor, CHUNK_SIZE};
 
 pub const CAMERA_SPEED: f32 = 40.;
@@ -218,21 +216,15 @@ fn main() {
     let tlc_size = voxel_mem_grid.metadata().tlc_size();
     let mem_grid = WorldMemoryGrid::new(voxel_mem_grid, start_tlc, 7);
     let mem_grid_size = mem_grid.size();
-    let mut world = World::new(
-        mem_grid,
-        ChunkLoader::<
-            WorldChunkLoadQueueItemData<N_LODS>,
-            WorldEditorMetadata,
-            BorrowedWorldChunkEditor<N_LODS>,
-        >::new(ChunkLoaderParams { n_threads: 8 }),
-        Camera::new(tlc_size, mem_grid_size),
-        tlc_size,
-        16,
-    );
+    let mut world = World::new(mem_grid, Camera::new(tlc_size, mem_grid_size), tlc_size, 16);
+    let mut loader: ChunkLoader<
+        WorldChunkLoadQueueItemData<N_LODS>,
+        BorrowedWorldChunkEditor<N_LODS>,
+    > = ChunkLoader::new(ChunkLoaderParams { n_threads: 8 });
 
-    world.queue_load_all(); // load all chunks in render distance
+    world.queue_load_all(&mut loader); // load all chunks in render distance
 
-    let largest_lod = world.mem_grid.voxel.metadata().largest_lod();
+    let voxel_md = world.mem_grid.voxel.metadata().clone();
 
     // Event loop
 
@@ -301,94 +293,76 @@ fn main() {
                 last_render_time = frame_start;
 
                 // World update
-                world.move_camera(&mut camera_controller, dt); // can only be done before or after editing, not during
+                world.move_camera(&mut camera_controller, dt, &mut loader); // can only be done before or after editing, not during
                 dbg!(Instant::now() - frame_start);
 
                 let camera_pos = world.camera().clone();
 
-                world.edit::<WorldChunkEditor<N_LODS>, _, _>(
-                    |mut editor| {
-                        dbg!(Instant::now() - frame_start);
+                loader.sync(&mut world, &load_chunk, voxel_md.clone());
 
-                        println!(
-                            "Valid chunks: {:.2}%",
-                            editor
-                                .mem_grid
-                                .chunks
-                                .iter()
-                                .map(|c| c.voxel.all_lods_valid() as u32)
-                                .sum::<u32>() as f32
-                                * 100.0
-                                / editor.mem_grid.chunks.len() as f32,
-                        );
-
-                        if left_clicked || right_clicked {
-                            let meta = editor.mem_grid.metadata().voxel.clone();
-                            match cast_ray(
-                                &mut editor.mem_grid,
-                                camera_pos.pos().to_owned(),
-                                camera_pos.viewport_center() - camera_pos.pos().0,
-                                CHUNK_SIZE,
-                                largest_lod.lvl(),
-                            ) {
-                                Ok(CastRayResult::Hit(RayVoxelIntersect {
+                if left_clicked || right_clicked {
+                    match cast_ray(
+                        &mut world,
+                        camera_pos.pos().to_owned(),
+                        camera_pos.viewport_center() - camera_pos.pos().0,
+                        CHUNK_SIZE,
+                        voxel_md.largest_lod().lvl(),
+                    ) {
+                        Ok(CastRayResult::Hit(RayVoxelIntersect {
+                            pos,
+                            index,
+                            tlc,
+                            face,
+                        })) => {
+                            if left_clicked {
+                                let _ = world.edit_chunk(tlc).unwrap().voxel.set_voxel(
                                     pos,
                                     index,
+                                    Block::Air,
+                                    &voxel_md,
+                                );
+                            }
+                            if right_clicked {
+                                let global_pos = global_voxel_pos_from_pos_in_tlc(
                                     tlc,
-                                    face,
-                                })) => {
-                                    if left_clicked {
-                                        let _ = editor
-                                            .mem_grid
-                                            .chunk_mut(tlc)
-                                            .unwrap()
-                                            .voxel
-                                            .set_voxel(pos, index, Block::Air, &meta);
-                                    }
-                                    if right_clicked {
-                                        let global_pos = global_voxel_pos_from_pos_in_tlc(
-                                            tlc,
-                                            pos,
-                                            meta.chunk_size(),
-                                            meta.largest_lod().lvl(),
-                                        )
-                                        .0 + face.delta().0.map(|a| a as i64);
-                                        let (new_tlc, new_pos) = voxel_pos_in_tlc_from_global_pos(
-                                            VoxelPos(global_pos),
-                                            meta.chunk_size(),
-                                            meta.largest_lod().lvl(),
-                                        );
+                                    pos,
+                                    world.mem_grid.voxel.metadata().chunk_size(),
+                                    voxel_md.largest_lod().lvl(),
+                                )
+                                .0 + face.delta().0.map(|a| a as i64);
+                                let (new_tlc, new_pos) = voxel_pos_in_tlc_from_global_pos(
+                                    VoxelPos(global_pos),
+                                    CHUNK_SIZE,
+                                    voxel_md.largest_lod().lvl(),
+                                );
 
-                                        // make sure this TLC has LOD 0
-                                        let v =
-                                            &mut editor.mem_grid.chunk_mut(new_tlc).unwrap().voxel;
-                                        if v.lods()[0].is_some() {
-                                            let _ = v.set_voxel(
-                                                new_pos,
-                                                VoxelPosInLod {
-                                                    pos: new_pos.0,
-                                                    lvl: 0,
-                                                    sublvl: 0,
-                                                }
-                                                .index(meta.chunk_size(), meta.largest_lod().lvl()),
-                                                Block::Metal,
-                                                &meta,
-                                            );
+                                // make sure this TLC has LOD 0
+                                let v = &mut world.edit_chunk(new_tlc).unwrap().voxel;
+                                if v.lods()[0].is_some() {
+                                    let _ = v.set_voxel(
+                                        new_pos,
+                                        VoxelPosInLod {
+                                            pos: new_pos.0,
+                                            lvl: 0,
+                                            sublvl: 0,
                                         }
-                                    }
+                                        .index(CHUNK_SIZE, voxel_md.largest_lod().lvl()),
+                                        Block::Metal,
+                                        &voxel_md,
+                                    );
                                 }
-                                _ => {}
                             }
                         }
-                    },
-                    &load_chunk,
-                );
+                        _ => {}
+                    }
+                }
 
                 dbg!(Instant::now() - frame_start);
 
                 // Apply updates to staging buffers through the renderer
                 {
                     let render_editor = renderer.start_updating_staging_buffers();
+                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .camera
@@ -422,7 +396,7 @@ fn main() {
 
                 renderer.draw_frame();
                 dbg!(Instant::now() - frame_start);
-                world.chunk_loader().print_status();
+                loader.print_status();
 
                 left_clicked = false;
                 right_clicked = false;

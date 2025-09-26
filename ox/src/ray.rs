@@ -7,9 +7,9 @@ use crate::{
         mem_grid::{
             utils::{ChunkSize, VoxelPosInLod},
             voxel::grid::ChunkVoxelEditor,
-            MemoryGrid, MemoryGridChunkEditor,
+            EditMemoryGridChunk, MemoryGrid,
         },
-        TlcPos, VoxelPos, VoxelVector,
+        TlcPos, VoxelPos, VoxelVector, World,
     },
 };
 
@@ -351,35 +351,33 @@ pub enum CastRayResult {
 /// Cast a ray and get the first block it intersects. Operates only at LOD 0.
 /// Error return means the ray entered an unloaded chunk. Assumes that the
 /// starting TLC is the center one.
-pub fn cast_ray<
-    VE: VoxelTypeEnum,
-    const N: usize,
-    CE: ChunkEditorVoxels<VE, N> + for<'e> MemoryGridChunkEditor<'e, MG>,
-    MD,
-    MG: MemoryGrid,
->(
-    grid: &mut MG,
+pub fn cast_ray<const N: usize, VE: VoxelTypeEnum, MG: MemoryGrid + EditMemoryGridChunk<M>, M>(
+    world: &mut World<MG>,
     // position relative to the bottom corner of the memory grid
     start_pos: VoxelPos<f32>,
     ray_dir: Vector3<f32>,
     chunk_size: ChunkSize,
     largest_chunk_lvl: u8,
-) -> Result<CastRayResult, ()> {
+) -> Result<CastRayResult, ()>
+where
+    for<'a> MG::ChunkEditor<'a>: ChunkEditorVoxels<VE, N>,
+{
     // local_pos should be between 0 and tlc_size in all dims.
     // When we trace the ray, if it goes outisde that, we need to switch chunks
 
     let tlc_size = chunk_size.size().pow(largest_chunk_lvl as u32) as i32;
-    let pos = start_pos.0 - Vector3::from_value((tlc_size as usize * (grid.size() / 2 - 1)) as f32);
+    let pos = start_pos.0
+        - Vector3::from_value((tlc_size as usize * (world.mem_grid.size() / 2 - 1)) as f32);
     let mut ray_pos = RayPos {
         pos,
         ipos: pos.map(|a| a.floor() as i32),
-        tlc: grid.center_chunk_pos(),
+        tlc: world.mem_grid.center_chunk_pos(),
         last_crossed_ax: None,
     };
 
     for _ in 0..=1 {
         match cast_ray_in_tlc(
-            grid.edit_chunk::<CE>(ray_pos.tlc).unwrap().voxels(),
+            world.edit_chunk(ray_pos.tlc).unwrap().voxels(),
             ray_pos,
             ray_dir,
             chunk_size,

@@ -8,22 +8,19 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use ox::renderer::component::voxels::data::{VoxelBitmask, VoxelTypeIDs};
 use ox::renderer::component::voxels::lod::{VoxelIDUpdate, VoxelLODUpdate};
 use ox::voxel_type::{Material, VoxelTypeDefinition, VoxelTypeEnum};
+use ox::world::camera::Camera;
 use ox::world::mem_grid::utils::{cubed, squared, VoxelPosInLod};
-use ox::world::mem_grid::voxel::grid::ChunkVoxelEditor;
 use ox::world::mem_grid::voxel::{VoxelLODCreateParams, VoxelMemoryGrid};
-use ox::world::mem_grid::{MemoryGrid, MemoryGridEditorChunk};
-use ox::world::TlcPos;
+use ox::world::{TlcPos, World};
 use ox::{
+    loader::{ChunkLoadQueueItem, ChunkLoader, ChunkLoaderParams},
     renderer::test_context::TestContext,
-    world::{
-        loader::{ChunkLoadQueueItem, ChunkLoader, ChunkLoaderParams},
-        mem_grid::{
-            utils::ChunkSize,
-            voxel::grid::{
-                BorrowedChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
-            },
+    world::mem_grid::{
+        utils::ChunkSize,
+        voxel::grid::{
+            BorrowedChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
         },
-        BufferChunkState,
+        MemoryGrid, MemoryGridLoadChunks,
     },
 };
 use vulkano::command_buffer::BufferCopy;
@@ -31,7 +28,7 @@ use vulkano::memory::allocator::MemoryAllocator;
 
 const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
 
-#[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive, Hash, PartialEq, Eq)]
 pub enum Block {
     AIR,
     SOLID,
@@ -61,8 +58,8 @@ impl VoxelTypeEnum for Block {
         }
     }
 
-    fn empty() -> u8 {
-        0
+    fn empty() -> Block {
+        Block::AIR
     }
 }
 
@@ -74,7 +71,6 @@ fn fill_chunk<const N: usize, VE: VoxelTypeEnum>(
     unsafe {
         data.load_new(
             chunk.pos,
-            chunk.data.lods,
             |_, lvl, sublvl, voxel_ids_out, tlc_size, largest_chunk_lvl| {
                 let voxel_size = CHUNK_SIZE.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
                 for x in 0..(tlc_size / voxel_size) as u32 {
@@ -91,10 +87,7 @@ fn fill_chunk<const N: usize, VE: VoxelTypeEnum>(
                     }
                 }
             },
-            metadata.chunk_size(),
-            metadata.tlc_size(),
-            metadata.largest_lod().lvl(),
-            metadata.lod_block_fill_thresh(),
+            &metadata,
         );
     }
 }
@@ -126,36 +119,20 @@ fn assert_updates_eq(u1: Vec<VoxelLODUpdate>, u2: Vec<VoxelLODUpdate>) {
     assert_eq!(
         u1.iter()
             .cloned()
-            .map(|u| u
-                .bitmask_updated_regions
-                .into_iter()
-                .map(|r| r.into())
-                .collect())
-            .collect::<HashSet<Vec<BufferCopyCmp>>>(),
+            .map(|u| u.bitmask_updated_region.into())
+            .collect::<HashSet<BufferCopyCmp>>(),
         u2.iter()
             .cloned()
-            .map(|u| u
-                .bitmask_updated_regions
-                .into_iter()
-                .map(|r| r.into())
-                .collect())
-            .collect::<HashSet<Vec<BufferCopyCmp>>>(),
+            .map(|u| u.bitmask_updated_region.into())
+            .collect::<HashSet<BufferCopyCmp>>(),
     );
     assert_eq!(
         u1.into_iter()
-            .filter_map(|u| u.id_update.map(|iu| iu
-                .updated_regions
-                .into_iter()
-                .map(|r| r.into())
-                .collect()))
-            .collect::<HashSet<Vec<BufferCopyCmp>>>(),
+            .filter_map(|u| u.id_update.map(|iu| iu.updated_region.into()))
+            .collect::<HashSet<BufferCopyCmp>>(),
         u2.into_iter()
-            .filter_map(|u| u.id_update.map(|iu| iu
-                .updated_regions
-                .into_iter()
-                .map(|r| r.into())
-                .collect()))
-            .collect::<HashSet<Vec<BufferCopyCmp>>>(),
+            .filter_map(|u| u.id_update.map(|iu| iu.updated_region.into()))
+            .collect::<HashSet<BufferCopyCmp>>(),
     );
 }
 
@@ -163,7 +140,7 @@ fn assert_updates_eq(u1: Vec<VoxelLODUpdate>, u2: Vec<VoxelLODUpdate>) {
 fn test_queue_load_all() {
     let renderer_context = TestContext::new();
     let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 } - Vector3::from_value(7));
-    let (mut grid, _) = VoxelMemoryGrid::new(
+    let (grid, _) = VoxelMemoryGrid::new(
         [
             VoxelLODCreateParams {
                 voxel_resolution: 1,
@@ -210,6 +187,9 @@ fn test_queue_load_all() {
         CHUNK_SIZE,
         start_tlc,
     );
+    let v = 2; // this doesn't matter
+    let mg_size = grid.size();
+    let mut world = World::new(grid, Camera::new(v, mg_size), v, v as u32);
 
     let expected_queue: HashSet<_> = {
         let mut q = (-7..=7)
@@ -249,7 +229,7 @@ fn test_queue_load_all() {
         q.into_values().collect()
     };
 
-    let queue = grid.queue_load_all();
+    let queue = world.mem_grid.queue_load_all();
 
     assert_eq!(
         queue.clone().into_iter().collect::<HashSet<_>>(),
@@ -259,35 +239,27 @@ fn test_queue_load_all() {
 
     // Load chunks
     {
-        let mut editor = ChunkVoxelEditor::<Block, 5>::edit_grid(&mut grid);
+        let mut loader =
+            ChunkLoader::<_, BorrowedChunkVoxelEditor<Block, 5>>::new(ChunkLoaderParams {
+                n_threads: 1,
+            });
+        let md = world.mem_grid.metadata().clone();
+        for chunk in queue {
+            let priority = world.mem_grid.chunk_loading_priority(chunk.pos);
+            loader.enqueue(chunk, priority);
+        }
+        loader.sync(&mut world, &fill_chunk::<5, Block>, md.clone());
+        assert!(loader.skipped_loading_last() == 0);
 
-        let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
-        let all_unloaded = [
-            BufferChunkState::Unloaded,
-            BufferChunkState::Unloaded,
-            BufferChunkState::Unloaded,
-        ];
-        loader.sync(
-            start_tlc,
-            &mut editor,
-            queue,
-            &all_unloaded,
-            &fill_chunk::<5, Block>,
-        );
         while loader.active_loading_threads() > 0 {
-            loader.sync(
-                start_tlc,
-                &mut editor,
-                vec![],
-                &all_unloaded,
-                &fill_chunk::<5, Block>,
-            );
+            loader.sync(&mut world, &fill_chunk::<5, Block>, md.clone());
+            assert!(loader.skipped_loading_last() == 0);
         }
     }
 
     // Examine updates that would be made to staging buffers for each LOD
 
-    let [u_0_0, u_0_1, u_0_2, u_1_0, u_2_0] = grid.get_updates();
+    let [u_0_0, u_0_1, u_0_2, u_1_0, u_2_0] = world.mem_grid.get_updates();
     let dummy_bitmask = VoxelBitmask::new_vec(0);
     let dummy_ids = VoxelTypeIDs::new_vec(0);
 
@@ -296,20 +268,20 @@ fn test_queue_load_all() {
         u_0_0,
         vec![VoxelLODUpdate {
             bitmask: &dummy_bitmask,
-            bitmask_updated_regions: vec![BufferCopy {
+            bitmask_updated_region: BufferCopy {
                 src_offset: 0,
                 dst_offset: 0,
                 size: cubed(64) / 8,
                 ..Default::default()
-            }],
+            },
             id_update: Some(VoxelIDUpdate {
                 ids: &dummy_ids,
-                updated_regions: vec![BufferCopy {
+                updated_region: BufferCopy {
                     src_offset: 0,
                     dst_offset: 0,
                     size: cubed(64),
                     ..Default::default()
-                }],
+                },
             }),
         }],
     );
@@ -317,21 +289,21 @@ fn test_queue_load_all() {
     let gen_update =
         |x: u64, y: u64, z: u64, grid_size: u64, n_vox: u64, ids: bool| VoxelLODUpdate {
             bitmask: &dummy_bitmask,
-            bitmask_updated_regions: vec![BufferCopy {
+            bitmask_updated_region: BufferCopy {
                 src_offset: 0,
                 dst_offset: (x + y * squared(grid_size) + z * grid_size) * (n_vox / 8).max(16),
                 size: (n_vox + 7) / 8,
                 ..Default::default()
-            }],
+            },
             id_update: if ids {
                 Some(VoxelIDUpdate {
                     ids: &dummy_ids,
-                    updated_regions: vec![BufferCopy {
+                    updated_region: BufferCopy {
                         src_offset: 0,
                         dst_offset: (x + y * squared(grid_size) + z * grid_size) * n_vox.max(16),
                         size: n_vox,
                         ..Default::default()
-                    }],
+                    },
                 })
             } else {
                 None

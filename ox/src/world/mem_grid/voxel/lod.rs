@@ -1,12 +1,12 @@
+use crate::loader::LayerChunk;
 use crate::renderer::component::voxels::data::VoxelTypeIDs;
 use crate::renderer::component::voxels::lod::RendererVoxelLOD;
 use crate::renderer::component::voxels::lod::{VoxelIDUpdate, VoxelLODUpdate};
 use crate::voxel_type::VoxelTypeEnum;
-use crate::world::loader::LayerChunk;
-use crate::world::mem_grid::layer::{MemoryGridLayer, MemoryGridLayerMetadata};
+use crate::world::mem_grid::layer::MemoryGridLayer;
 use crate::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use crate::world::mem_grid::voxel::gpu_defs::{ChunkBitmask, ChunkVoxels};
-use crate::world::mem_grid::ChunkEditor;
+use crate::world::mem_grid::EditMemoryGridChunk;
 use crate::world::TlcPos;
 use cgmath::Point3;
 use getset::{CopyGetters, Getters, MutGetters};
@@ -42,7 +42,7 @@ pub struct LodMetadata {
 
 #[derive(Clone, Debug)]
 pub struct LodState {
-    updated_regions: Vec<UpdateRegion>,
+    pub updated_regions: Vec<UpdateRegion>,
 }
 
 #[derive(Clone, Debug, Getters)]
@@ -149,8 +149,7 @@ impl VoxelMemoryGridLod {
         )
     }
 
-    /// Aggregate the values from updated_bitmask_regions_layer into absolute regions in the
-    /// bitmask buffer, generate regions for updating the voxel type ID buffer, and reset these
+    /// Aggregate the values from updated_regions to pass to the renderer and reset these
     /// tracked regions if clear_regions=true.
     pub fn aggregate_updates(&mut self, clear_regions: bool) -> Vec<VoxelLODUpdate> {
         let voxels_per_tlc = self.metadata().extra().voxels_per_tlc;
@@ -159,6 +158,7 @@ impl VoxelMemoryGridLod {
             .updated_regions
             .iter()
             .filter_map(|region| {
+                // skip updates to chunks that are not loaded
                 chunks[region.chunk_idx].get().map(|chunk| VoxelLODUpdate {
                     bitmask: &chunk.bitmask.bitmask,
                     bitmask_updated_region: region.bitmask_copy_region(voxels_per_tlc),
@@ -282,9 +282,10 @@ impl LodChunkData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Getters)]
 pub struct UpdatedRegionsMut<'a> {
     regions: &'a mut Vec<UpdateRegion>,
+    #[getset(get = "pub")]
     chunk_idx: usize,
 }
 
@@ -440,6 +441,7 @@ pub struct LodChunkEditorMaybeUnloaded<'a, VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     #[getset(get = "pub", get_mut = "pub")]
     data: &'a mut LayerChunk<LodChunkData>,
+    #[getset(get = "pub")]
     updated_regions: UpdatedRegionsMut<'a>,
     #[get_copy = "pub"]
     lvl: u8,
@@ -461,31 +463,56 @@ impl<'a, VE: VoxelTypeEnum> LodChunkEditorMaybeUnloaded<'a, VE> {
     }
 }
 
-impl<'a, VE: VoxelTypeEnum>
-    ChunkEditor<
-        &'a mut LayerChunk<LodChunkData>,
-        &'a MemoryGridLayerMetadata<LodMetadata>,
-        &'a mut LodState,
-    > for LodChunkEditorMaybeUnloaded<'a, VE>
+impl<VE: VoxelTypeEnum> EditMemoryGridChunk<VE>
+    for MemoryGridLayer<LodChunkData, LodMetadata, LodState>
 {
-    fn edit(
-        chunk_data: &'a mut LayerChunk<LodChunkData>,
-        metadata: &'a MemoryGridLayerMetadata<LodMetadata>,
-        state: &'a mut LodState,
-        chunk_idx: usize,
-    ) -> Self {
-        LodChunkEditorMaybeUnloaded {
+    type ChunkEditor<'a> = LodChunkEditorMaybeUnloaded<'a, VE>
+        where
+            Self: 'a;
+
+    fn edit_chunk(
+        &mut self,
+        pos: TlcPos<i64>,
+        buffer_chunk_states: [crate::world::BufferChunkState; 3],
+    ) -> Option<Self::ChunkEditor<'_>> {
+        let vgrid_pos = self.chunk_vgrid_pos(pos, buffer_chunk_states)?;
+        let chunk_idx = self.index_for_vgrid_pos(vgrid_pos);
+        let (lvl, sublvl) = (self.metadata().extra().lvl, self.metadata().extra().sublvl);
+        let (chunks, state) = self.chunks_and_state_mut();
+        Some(LodChunkEditorMaybeUnloaded {
             voxel_type_enum: PhantomData,
-            data: chunk_data,
-            sublvl: metadata.extra().sublvl as u8,
-            lvl: metadata.extra().lvl as u8,
+            data: &mut chunks[chunk_idx],
+            sublvl,
+            lvl,
             updated_regions: UpdatedRegionsMut {
                 regions: &mut state.updated_regions,
                 chunk_idx,
             },
-        }
+        })
     }
 }
+
+// impl<'a, VE: VoxelTypeEnum> LayerChunkEditor<'a, LodChunkData, LodMetadata, LodState>
+//     for LodChunkEditorMaybeUnloaded<'a, VE>
+// {
+//     fn edit<'e: 'a>(
+//         chunk: &'e mut LayerChunk<LodChunkData>,
+//         metadata: &'e MemoryGridLayerMetadata<LodMetadata>,
+//         state: &'e mut LodState,
+//         chunk_idx: usize,
+//     ) -> Self {
+//         LodChunkEditorMaybeUnloaded {
+//             voxel_type_enum: PhantomData,
+//             data: chunk,
+//             sublvl: metadata.extra().sublvl as u8,
+//             lvl: metadata.extra().lvl as u8,
+//             updated_regions: UpdatedRegionsMut {
+//                 regions: &mut state.updated_regions,
+//                 chunk_idx,
+//             },
+//         }
+//     }
+// }
 
 pub enum LodChunkEditorVariant<'a> {
     WithVoxels(LodChunkEditorWithVoxels<'a>),
@@ -641,11 +668,11 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
     /// will be fully copied to the GPU.
     pub fn update_full_buffer_gpu(&mut self) {
         let chunk_idx = self.updated_regions.chunk_idx;
-        *self.updated_regions.regions = vec![UpdateRegion {
+        self.updated_regions.regions.push(UpdateRegion {
             voxel_idx: 0,
             chunk_idx,
             n_voxels: self.data.bitmask.n_voxels(),
-        }];
+        });
     }
 
     /// Set a single voxel and add an update region for later GPU transfer
@@ -712,11 +739,11 @@ impl<'a> LodChunkEditorWithoutVoxelsMut<'a> {
     /// will be fully copied to the GPU.
     pub fn update_full_buffer_gpu(&mut self) {
         let chunk_idx = self.updated_regions.chunk_idx;
-        *self.updated_regions.regions = vec![UpdateRegion {
+        self.updated_regions.regions.push(UpdateRegion {
             voxel_idx: 0,
             chunk_idx,
             n_voxels: self.bitmask.n_voxels(),
-        }];
+        });
     }
 
     pub fn update_bitmask_bit_from_lower_lod(
@@ -908,7 +935,7 @@ impl<VE: VoxelTypeEnum> BorrowedLodChunkEditorMaybeUnloaded<VE> {
 
 /// Provides access to chunk voxels to edit and recalculates the full bitmask when dropped.
 pub struct LodChunkOverwriter<'a, VE: VoxelTypeEnum> {
-    editor: LodChunkEditorWithVoxelsMut<'a>,
+    pub editor: LodChunkEditorWithVoxelsMut<'a>,
     _t: PhantomData<VE>,
 }
 
@@ -918,28 +945,31 @@ impl<'a, VE: VoxelTypeEnum> Drop for LodChunkOverwriter<'a, VE> {
     }
 }
 
+const MIN_BITS_PER_TLC_BITMASK: usize = 128;
+
 impl UpdateRegion {
     pub fn bitmask_copy_region(&self, voxels_per_tlc: usize) -> BufferCopy {
         let voxel_offset = self.voxel_idx / 8;
         BufferCopy {
             src_offset: voxel_offset as u64,
-            dst_offset: (self.chunk_idx * voxels_per_tlc / 8 + voxel_offset) as u64,
-            size: (self.n_voxels / 8) as u64,
+            dst_offset: (self.chunk_idx * voxels_per_tlc.max(MIN_BITS_PER_TLC_BITMASK) / 8
+                + voxel_offset) as u64,
+            size: (self.n_voxels / 8).max(1) as u64,
             ..Default::default()
         }
     }
 
     pub fn voxel_id_copy_region(&self, voxels_per_tlc: usize) -> BufferCopy {
-        let bytes_per_voxel = if voxels_per_tlc >= 128 {
+        let bytes_per_voxel = if voxels_per_tlc >= MIN_BITS_PER_TLC_BITMASK {
             VoxelTypeIDs::BITS_PER_VOXEL / 8
         } else {
-            (voxels_per_tlc * VoxelTypeIDs::BITS_PER_VOXEL).max(128) / 8
+            (voxels_per_tlc * VoxelTypeIDs::BITS_PER_VOXEL).max(MIN_BITS_PER_TLC_BITMASK) / 8
         };
         BufferCopy {
             src_offset: (self.voxel_idx * bytes_per_voxel) as u64,
             dst_offset: ((self.chunk_idx * voxels_per_tlc + self.voxel_idx) * bytes_per_voxel)
                 as u64,
-            size: (self.n_voxels * bytes_per_voxel) as u64,
+            size: (self.n_voxels * bytes_per_voxel).max(1) as u64,
             ..Default::default()
         }
     }

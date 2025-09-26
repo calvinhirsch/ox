@@ -1,18 +1,15 @@
-use cgmath::{Array, Point3, Vector3};
+use crate::loader::BorrowedChunk;
+use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use getset::Getters;
-use loader::{BorrowChunkForLoading, BorrowedChunk};
 use mem_grid::{MemGridShift, ShiftGridAxis, ShiftGridAxisVal};
 use num_traits::Zero;
-use std::marker::PhantomData;
-use std::mem;
 use std::time::Duration;
 
 pub mod camera;
-pub mod loader;
 pub mod mem_grid;
 
-use crate::world::loader::{ChunkLoadQueueItem, ChunkLoader};
-use crate::world::mem_grid::{GetMetadata, MemoryGrid, MemoryGridChunkEditor};
+use crate::loader::ChunkLoader;
+use crate::world::mem_grid::{EditMemoryGridChunk, MemoryGrid, MemoryGridLoadChunks};
 use camera::{controller::CameraController, Camera};
 
 /// Position in units of top level chunks
@@ -43,13 +40,8 @@ pub struct WorldMetadata {
 }
 
 #[derive(Getters, Debug)]
-pub struct World<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>> {
-    metadata_type: PhantomData<MD>,
-
+pub struct World<MG> {
     pub mem_grid: MG,
-    #[get = "pub"]
-    chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, MD, BC>,
-    chunks_to_load: Vec<ChunkLoadQueueItem<MG::ChunkLoadQueueItemData>>,
     #[get = "pub"]
     camera: Camera,
     #[get = "pub"]
@@ -65,21 +57,10 @@ pub enum BufferChunkState {
     LoadedLower = 2,
 }
 
-impl<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>>
-    World<QI, BC, MD, MG>
-{
-    pub fn new(
-        mem_grid: MG,
-        chunk_loader: ChunkLoader<MG::ChunkLoadQueueItemData, MD, BC>,
-        camera: Camera,
-        tlc_size: usize,
-        tlc_load_dist_thresh: u32,
-    ) -> Self {
+impl<MG: MemoryGrid> World<MG> {
+    pub fn new(mem_grid: MG, camera: Camera, tlc_size: usize, tlc_load_dist_thresh: u32) -> Self {
         World {
-            metadata_type: PhantomData,
             mem_grid,
-            chunk_loader,
-            chunks_to_load: vec![],
             camera,
             metadata: WorldMetadata {
                 tlc_size,
@@ -89,11 +70,66 @@ impl<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>>
         }
     }
 
-    pub fn queue_load_all(&mut self) {
-        self.chunks_to_load.extend(self.mem_grid.queue_load_all())
+    pub fn set_camera_res(&mut self, width: u32, height: u32) {
+        self.camera.resolution = (width, height);
     }
 
-    pub fn move_camera(&mut self, camera_controller: &mut impl CameraController, dt: Duration) {
+    /// Given a chunk position (in global chunk coordinates), determine that chunk's position
+    /// in the virtual memory grid. This involves checking the state of the buffer chunks to
+    /// see where chunks on the edge of the loaded area might end up in the vgrid.
+    pub fn chunk_vgrid_pos(&self, global_tlc_pos: TlcPos<i64>) -> Option<TlcVector<usize>> {
+        dbg!(global_tlc_pos.0 - self.mem_grid.start_tlc().0.to_vec());
+        let mut i = 0;
+        if let Point3 {
+            x: Some(x),
+            y: Some(y),
+            z: Some(z),
+        } = (global_tlc_pos.0 - self.mem_grid.start_tlc().0.to_vec()).map(|a| {
+            let state = self.metadata.buffer_chunk_states[i];
+            i += 1;
+            if a < 0 {
+                if a == -1 && state == BufferChunkState::LoadedLower {
+                    Some(self.mem_grid.size() - 1)
+                } else {
+                    None
+                }
+            } else if a >= self.mem_grid.size() as i64 - 1 {
+                if a == self.mem_grid.size() as i64 - 1 && state == BufferChunkState::LoadedUpper {
+                    Some(self.mem_grid.size() - 1)
+                } else {
+                    None
+                }
+            } else {
+                Some(a as usize)
+            }
+        }) {
+            dbg!(("vgrid_pos", x, y, z));
+            Some(TlcVector(Vector3 { x, y, z }))
+        } else {
+            None
+        }
+    }
+}
+
+impl<QI: Eq, MG: MemoryGrid + MemoryGridLoadChunks<ChunkLoadQueueItemData = QI>> World<MG> {
+    pub fn queue_load_all<BC>(&mut self, loader: &mut ChunkLoader<QI, BC>)
+    where
+        BC: BorrowedChunk<MemoryGrid = MG>,
+    {
+        for chunk in self.mem_grid.queue_load_all() {
+            let prio = self.mem_grid.chunk_loading_priority(chunk.pos);
+            loader.enqueue(chunk, prio);
+        }
+    }
+
+    pub fn move_camera<BC>(
+        &mut self,
+        camera_controller: &mut impl CameraController,
+        dt: Duration,
+        loader: &mut ChunkLoader<QI, BC>,
+    ) where
+        BC: BorrowedChunk<MemoryGrid = MG>,
+    {
         camera_controller.apply(&mut self.camera, dt);
 
         // Delta in units of top level chunks; 0 if still in the same TLC
@@ -175,62 +211,25 @@ impl<QI: Eq, BC: BorrowedChunk, MD, MG: MemoryGrid<ChunkLoadQueueItemData = QI>>
                 ))
             }
         }))
-        .map(|shift| self.chunks_to_load.extend(self.mem_grid.shift(&shift)));
-    }
-
-    pub fn set_camera_res(&mut self, width: u32, height: u32) {
-        self.camera.resolution = (width, height);
+        .map(|shift| {
+            for chunk in self.mem_grid.shift(&shift) {
+                let priority = self.mem_grid.chunk_loading_priority(chunk.pos);
+                loader.enqueue(chunk, priority);
+            }
+        });
     }
 }
 
-impl<
-        QI: Clone + Send + Eq + std::fmt::Debug + 'static,
-        BC: BorrowedChunk + 'static,
-        MD: Clone + Send + 'static,
-        MG: MemoryGrid<ChunkLoadQueueItemData = QI> + GetMetadata<MD>,
-    > World<QI, BC, MD, MG>
-{
-    pub fn sync_chunk_loading<'a, CE, LF>(&mut self, load_f: &'static LF)
+impl<MG: MemoryGrid> World<MG> {
+    pub fn edit_chunk<M>(
+        &mut self,
+        global_tlc_pos: TlcPos<i64>,
+    ) -> Option<<MG as EditMemoryGridChunk<M>>::ChunkEditor<'_>>
     where
-        CE: BorrowChunkForLoading<BC> + for<'e> MemoryGridChunkEditor<'e, MG>,
-        LF: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
+        MG: EditMemoryGridChunk<M>,
     {
-        let start_tlc = self.mem_grid.start_tlc();
-        let chunks_to_load = mem::take(&mut self.chunks_to_load);
-        self.chunk_loader.sync::<CE, _, _>(
-            start_tlc,
-            &mut self.mem_grid,
-            chunks_to_load,
-            &self.metadata.buffer_chunk_states,
-            load_f,
-        );
+        dbg!(self.metadata().buffer_chunk_states);
+        self.mem_grid
+            .edit_chunk(global_tlc_pos, self.metadata().buffer_chunk_states)
     }
-
-    // pub fn edit<
-    //     'a,
-    //     CE: BorrowChunkForLoading<BC> + MemoryGridEditorChunk<'a, MG, MD>,
-    //     EF: FnOnce(WorldEditor<CE, MD>),
-    //     LF: Fn(&mut BC, ChunkLoadQueueItem<QI>, MD) + Sync,
-    // >(
-    //     &'a mut self,
-    //     edit_f: EF,
-    //     load_f: &'static LF,
-    // ) {
-    //     // Sync with chunk loader and queue new chunks to load
-    //     let start_tlc = self.mem_grid.start_tlc();
-    //     let chunks_to_load = mem::take(&mut self.chunks_to_load);
-    //     let mut mem_grid_editor = CE::edit_grid(&mut self.mem_grid);
-    //     self.chunk_loader.sync(
-    //         start_tlc,
-    //         &mut mem_grid_editor,
-    //         chunks_to_load,
-    //         &self.metadata.buffer_chunk_states,
-    //         load_f,
-    //     );
-
-    //     edit_f(WorldEditor {
-    //         mem_grid: mem_grid_editor,
-    //         metadata: &self.metadata,
-    //     })
-    // }
 }

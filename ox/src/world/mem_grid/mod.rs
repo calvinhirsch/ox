@@ -1,8 +1,8 @@
 use std::ops::Range;
 
-use crate::world::TlcPos;
-use crate::world::{loader::ChunkLoadQueueItem, TlcVector};
-use cgmath::{Array, EuclideanSpace, Point3, Vector3};
+use crate::world::{BufferChunkState, TlcPos};
+use crate::{loader::ChunkLoadQueueItem, world::TlcVector};
+use cgmath::{Array, EuclideanSpace, MetricSpace, Point3, Vector3};
 use derive_new::new;
 use getset::CopyGetters;
 
@@ -11,7 +11,7 @@ mod layer_set;
 pub mod utils;
 pub mod voxel;
 
-#[derive(new, CopyGetters)]
+#[derive(new, CopyGetters, Debug)]
 pub struct ShiftGridAxisVal {
     #[get_copy = "pub"]
     chunks: i32, // number of chunks to shift by
@@ -34,6 +34,7 @@ impl ShiftGridAxisVal {
 }
 
 /// What to do for each axis when shifting a memory grid.
+#[derive(Debug)]
 pub enum ShiftGridAxis {
     // Shift the grid by this amount
     Shift(ShiftGridAxisVal),
@@ -116,6 +117,7 @@ fn abc_pos<T: Into<i64>>(av: T, bv: T, cv: T, a: usize, b: usize, c: usize) -> T
     TlcPos(chunk)
 }
 
+#[derive(Debug)]
 pub struct MemGridShift([ShiftGridAxis; 3]);
 impl MemGridShift {
     pub fn new(axes: [ShiftGridAxis; 3]) -> Option<Self> {
@@ -194,6 +196,39 @@ impl MemGridShift {
 }
 
 pub trait MemoryGrid: Sized {
+    /// Size including any buffer chunks
+    fn size(&self) -> usize;
+
+    fn start_tlc(&self) -> TlcPos<i64>;
+
+    fn center_chunk_pos(&self) -> TlcPos<i64> {
+        TlcPos(self.start_tlc().0 + Vector3::from_value(self.size() as i64 / 2 - 1))
+    }
+
+    fn chunk_vgrid_pos_in(
+        global_tlc_pos: TlcPos<i64>,
+        grid_start_tlc: TlcPos<i64>,
+    ) -> Option<TlcVector<usize>> {
+        (global_tlc_pos.0 - grid_start_tlc.0.to_vec())
+            .cast::<usize>()
+            .map(|v| TlcVector(v.to_vec()))
+    }
+
+    fn chunk_vgrid_pos(&self, global_tlc_pos: TlcPos<i64>) -> Option<TlcVector<usize>> {
+        Self::chunk_vgrid_pos_in(global_tlc_pos, self.start_tlc())
+    }
+
+    fn chunk_loading_priority(&self, chunk_pos: TlcPos<i64>) -> u32 {
+        u32::MAX
+            - (Vector3::from_value(self.size() as f32 / 2.)
+                .cast::<f32>()
+                .unwrap()
+                .distance((chunk_pos.0 - self.start_tlc().0).cast::<f32>().unwrap())
+                * self.size() as f32) as u32
+    }
+}
+
+pub trait MemoryGridLoadChunks {
     type ChunkLoadQueueItemData;
 
     /// Queue all chunks in memory grid to be loaded. Does not queue buffer chunks or change their state.
@@ -206,52 +241,26 @@ pub trait MemoryGrid: Sized {
         &mut self,
         shift: &MemGridShift,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>>;
-
-    /// Size including any buffer chunks
-    fn size(&self) -> usize;
-
-    fn start_tlc(&self) -> TlcPos<i64>;
-
-    fn edit_chunk_at_grid_pos<'s: 'e, 'e, CE: MemoryGridChunkEditor<'e, Self>>(
-        &'e mut self,
-        grid_pos: TlcVector<usize>,
-    ) -> CE {
-        CE::edit_chunk_for_size(self, self.size(), grid_pos)
-    }
-
-    fn chunk_grid_pos_in(
-        global_tlc_pos: TlcPos<i64>,
-        grid_start_tlc: TlcPos<i64>,
-    ) -> Option<TlcVector<usize>> {
-        (global_tlc_pos.0 - grid_start_tlc.0.to_vec())
-            .cast::<usize>()
-            .map(|v| TlcVector(v.to_vec()))
-    }
-
-    fn chunk_grid_pos(&self, global_tlc_pos: TlcPos<i64>) -> Option<TlcVector<usize>> {
-        Self::chunk_grid_pos_in(global_tlc_pos, self.start_tlc())
-    }
-
-    fn edit_chunk<'s: 'e, 'e, CE: MemoryGridChunkEditor<'e, Self>>(
-        &'e mut self,
-        global_tlc_pos: TlcPos<i64>,
-    ) -> Option<CE> {
-        Some(self.edit_chunk_at_grid_pos::<CE>(self.chunk_grid_pos(global_tlc_pos)?))
-    }
-
-    fn center_chunk_pos(&self) -> TlcPos<i64> {
-        TlcPos(self.start_tlc().0 + Vector3::from_value(self.size() as i64 / 2 - 1))
-    }
 }
 
-pub trait GetMetadata<MD> {
-    fn metadata(&self) -> &MD;
-}
+pub trait EditMemoryGridChunk<M = ()>: MemoryGrid {
+    type ChunkEditor<'a>
+    where
+        Self: 'a;
 
-pub trait MemoryGridChunkEditor<'a, MG: MemoryGrid>: Sized {
-    fn edit_chunk_for_size(mem_grid: &'a mut MG, grid_size: usize, pos: TlcVector<usize>) -> Self;
-}
+    // fn edit_chunk_at_vgrid_pos(
+    //     &mut self,
+    //     vgrid_pos: TlcVector<usize>,
+    //     vgrid_size: usize,
+    // ) -> Option<Self::ChunkEditor<'_>>;
 
-pub trait ChunkEditor<C, MD, S> {
-    fn edit(chunk: C, metadata: MD, state: S, chunk_idx: usize) -> Self;
+    // fn edit_chunk_at_grid_pos(&mut self, grid_pos: TlcVector<usize>) -> Self::ChunkEditor<'_> {
+    //     self.edit_chunk_at_vgrid_pos(grid_pos, self.size()).unwrap()
+    // }
+
+    fn edit_chunk(
+        &mut self,
+        pos: TlcPos<i64>,
+        buffer_chunk_states: [BufferChunkState; 3],
+    ) -> Option<Self::ChunkEditor<'_>>;
 }

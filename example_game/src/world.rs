@@ -1,16 +1,16 @@
 use crate::blocks::Block;
 use cgmath::{Array, Point3, Vector3};
 use hashbrown::HashMap;
+use ox::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
 use ox::ray::ChunkEditorVoxels;
-use ox::world::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
-use ox::world::mem_grid::layer::MemoryGridLayer;
+use ox::world::mem_grid::layer::{DefaultLayerChunkEditor, MemoryGridLayer};
 use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::{
     BorrowedChunkVoxelEditor, ChunkVoxelEditor, VoxelChunkLoadQueueItemData,
     VoxelMemoryGridMetadata,
 };
 use ox::world::mem_grid::voxel::{ChunkVoxels, VoxelMemoryGrid};
-use ox::world::mem_grid::{MemoryGrid, MemoryGridEditor, MemoryGridEditorChunk};
+use ox::world::mem_grid::{EditMemoryGridChunk, MemoryGrid, MemoryGridLoadChunks};
 use ox::world::{TlcPos, VoxelPos};
 
 pub const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
@@ -45,6 +45,21 @@ pub struct WorldChunkLoadQueueItemData<const N: usize> {
     entity: Option<()>,
 }
 
+// #[derive(Debug, Clone)]
+// pub struct WorldMemoryGridMetadata {
+//     pub voxel: VoxelMemoryGridMetadata,
+//     pub entity: (),
+// }
+
+// impl<const N: usize> GetMetadata<WorldMemoryGridMetadata> for WorldMemoryGrid<N> {
+//     fn metadata(&self) -> WorldMemoryGridMetadata {
+//         WorldMemoryGridMetadata {
+//             voxel: self.voxel.metadata().clone(),
+//             entity: (),
+//         }
+//     }
+// }
+
 impl<const N: usize> WorldMemoryGrid<N> {
     pub fn new(
         voxel_mem_grid: VoxelMemoryGrid<N>,
@@ -62,12 +77,13 @@ impl<const N: usize> WorldMemoryGrid<N> {
                 TlcPos(start_tlc.0 + Vector3::from_value((vox_size - entity_grid_size) as i64 / 2)),
                 entity_grid_size,
                 (),
+                (),
             ),
         }
     }
 }
 
-impl<const N: usize> MemoryGrid for WorldMemoryGrid<N> {
+impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
     type ChunkLoadQueueItemData = WorldChunkLoadQueueItemData<N>;
 
     fn queue_load_all(&mut self) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
@@ -137,7 +153,8 @@ impl<const N: usize> MemoryGrid for WorldMemoryGrid<N> {
 
         queue.into_values().collect()
     }
-
+}
+impl<const N: usize> MemoryGrid for WorldMemoryGrid<N> {
     fn size(&self) -> usize {
         self.voxel.size()
     }
@@ -147,16 +164,10 @@ impl<const N: usize> MemoryGrid for WorldMemoryGrid<N> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct WorldEditorMetadata {
-    pub voxel: VoxelMemoryGridMetadata,
-    pub entity: (),
-}
-
 #[derive(Debug)]
 pub struct WorldChunkEditor<'a, const N: usize> {
     pub voxel: ChunkVoxelEditor<'a, Block, N>,
-    pub entity: Option<&'a mut LayerChunk<Entities>>,
+    pub entity: Option<DefaultLayerChunkEditor<'a, Entities>>,
 }
 
 impl<'a, const N: usize> ChunkEditorVoxels<Block, N> for WorldChunkEditor<'a, N> {
@@ -171,92 +182,79 @@ pub struct BorrowedWorldChunkEditor<const N: usize> {
     entity: Option<*mut LayerChunk<Entities>>,
 }
 
-impl<'a, const N: usize> MemoryGridEditorChunk<'a, WorldMemoryGrid<N>, WorldEditorMetadata>
-    for WorldChunkEditor<'a, N>
-{
-    fn edit_grid_with_size(
-        mem_grid: &'a mut WorldMemoryGrid<N>,
-        grid_size: usize,
-    ) -> MemoryGridEditor<WorldChunkEditor<'a, N>, WorldEditorMetadata> {
-        let size = mem_grid.size();
-        let start_tlc = mem_grid.start_tlc();
+impl<const N: usize> EditMemoryGridChunk for WorldMemoryGrid<N> {
+    type ChunkEditor<'a> = WorldChunkEditor<'a, N>
+        where
+            Self: 'a;
 
-        let voxel_editor = ChunkVoxelEditor::edit_grid_with_size(&mut mem_grid.voxel, grid_size);
-        let entity_editor = Option::<&'a mut LayerChunk<Entities>>::edit_grid_with_size(
-            &mut mem_grid.entity,
-            grid_size,
-        );
-        let metadata = WorldEditorMetadata {
-            voxel: (*voxel_editor.metadata()).clone(),
-            entity: (),
-        };
-
-        MemoryGridEditor::new(
-            voxel_editor
-                .chunks
-                .into_iter()
-                .zip(entity_editor.chunks.into_iter())
-                .map(|(voxels_o, entities_o)| WorldChunkEditor {
-                    voxel: voxels_o,
-                    entity: entities_o,
-                })
-                .collect(),
-            size,
-            start_tlc,
-            metadata,
-        )
+    fn edit_chunk(
+        &mut self,
+        pos: TlcPos<i64>,
+        buffer_chunk_states: [ox::world::BufferChunkState; 3],
+    ) -> Option<Self::ChunkEditor<'_>> {
+        Some(WorldChunkEditor {
+            voxel: self.voxel.edit_chunk(pos, buffer_chunk_states)?,
+            entity: self.entity.edit_chunk(pos, buffer_chunk_states),
+        })
     }
 }
 
-unsafe impl<'a, const N: usize> BorrowChunkForLoading<BorrowedWorldChunkEditor<N>>
+unsafe impl<'a, const N: usize>
+    BorrowChunkForLoading<BorrowedWorldChunkEditor<N>, WorldChunkLoadQueueItemData<N>>
     for WorldChunkEditor<'a, N>
 {
-    fn take_data_for_loading(&mut self) -> BorrowedWorldChunkEditor<N> {
-        if let Some(e) = self.entity.as_mut() {
-            unsafe { e.set_missing() };
-        }
-        BorrowedWorldChunkEditor {
-            entity: self.entity.as_mut().map(|e| *e as *mut _),
-            voxel: self.voxel.take_data_for_loading(),
-        }
+    fn should_still_load(&self, queue_item: &WorldChunkLoadQueueItemData<N>) -> bool {
+        self.voxel
+            .should_still_load(queue_item.voxel.as_ref().unwrap())
     }
 
     fn mark_invalid(&mut self) -> Result<(), ()> {
         let mut r = Ok(());
         if let Some(entity_data) = self.entity.as_mut() {
-            r = r.and(unsafe { entity_data.set_invalid() });
+            r = r.and(unsafe { entity_data.chunk.set_invalid() });
         }
         r = r.and(self.voxel.mark_invalid());
         r
+    }
+
+    fn take_data_for_loading(
+        &mut self,
+        queue_item: &WorldChunkLoadQueueItemData<N>,
+    ) -> BorrowedWorldChunkEditor<N> {
+        if let Some(e) = self.entity.as_mut() {
+            unsafe { e.chunk.set_missing() };
+        }
+        BorrowedWorldChunkEditor {
+            entity: self.entity.as_mut().map(|e| e.chunk as *mut _),
+            voxel: self
+                .voxel
+                .take_data_for_loading(queue_item.voxel.as_ref().unwrap()),
+        }
     }
 }
 
 unsafe impl<const N: usize> Send for BorrowedWorldChunkEditor<N> {}
 
 unsafe impl<const N: usize> BorrowedChunk for BorrowedWorldChunkEditor<N> {
-    unsafe fn mark_valid(&mut self) {
+    type MemoryGrid = WorldMemoryGrid<N>;
+
+    unsafe fn done_loading(&mut self, grid: &mut Self::MemoryGrid) {
         if let Some(e) = self.entity {
             unsafe {
                 (&mut *e).set_valid();
             }
         }
-        self.voxel.mark_valid();
+        self.voxel.done_loading(&mut grid.voxel);
     }
 }
 
 pub fn load_chunk<const N: usize>(
     editor: &mut BorrowedWorldChunkEditor<N>,
     chunk: ChunkLoadQueueItem<WorldChunkLoadQueueItemData<N>>,
-    metadata: WorldEditorMetadata,
+    params: VoxelMemoryGridMetadata,
 ) {
     unsafe {
-        editor.voxel.load_new(
-            chunk.pos,
-            chunk.data.voxel.unwrap().lods,
-            generate_chunk,
-            CHUNK_SIZE,
-            &metadata.voxel,
-        );
+        editor.voxel.load_new(chunk.pos, generate_chunk, &params);
     }
     if let Some(e) = editor.entity.as_mut() {
         unsafe { (&mut **e).get_mut_for_loading() }.entities.clear();
