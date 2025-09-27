@@ -276,7 +276,7 @@ where
                         // and so we just skip loading it (it remains "invalid")
                         dbg!(&item);
                         let skipped = if let Some(mut chunk) = world.edit_chunk(item.pos) {
-                            if !chunk.should_still_load(&item.data) {
+                            if chunk.should_still_load(&item.data) {
                                 match chunk.mark_invalid() {
                                     Ok(()) => {
                                         self.started_loading_last += 1;

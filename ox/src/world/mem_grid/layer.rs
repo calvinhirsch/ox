@@ -87,7 +87,6 @@ impl<C, MD, S> MemoryGridLayer<C, MD, S> {
         pos: TlcPos<i64>,
         buffer_chunk_states: [BufferChunkState; 3],
     ) -> Option<TlcVector<usize>> {
-        // dbg!((pos, self.start_tlc(), self.size()));
         let mut i = 0;
         if let Point3 {
             x: Some(x),
@@ -112,10 +111,8 @@ impl<C, MD, S> MemoryGridLayer<C, MD, S> {
                 Some(a as usize)
             }
         }) {
-            // dbg!(("vgrid_pos", x, y, z));
             Some(TlcVector(Vector3 { x, y, z }))
         } else {
-            // dbg!("failed");
             None
         }
     }
@@ -194,5 +191,115 @@ impl<C, MD, S> EditMemoryGridChunk for MemoryGridLayer<C, MD, S> {
             metadata: &self.metadata,
             layer_state: &mut self.state,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::Point3;
+
+    use crate::{
+        loader::LayerChunk,
+        world::{
+            mem_grid::{layer::MemoryGridLayer, utils::cubed, EditMemoryGridChunk},
+            BufferChunkState, TlcPos,
+        },
+    };
+
+    const SIZE: usize = 32;
+
+    #[test]
+    fn test_buffer_chunk_idx() {
+        let mut layer = MemoryGridLayer::new(
+            (0..cubed(SIZE)).map(|_| LayerChunk::new(())).collect(),
+            TlcPos(Point3 { x: 0, y: 0, z: 0 }),
+            SIZE,
+            (),
+            (),
+        );
+        debug_assert!(layer
+            .edit_chunk(
+                TlcPos(Point3 {
+                    x: -1,
+                    y: -1,
+                    z: -1
+                }),
+                [
+                    BufferChunkState::LoadedLower,
+                    BufferChunkState::LoadedLower,
+                    BufferChunkState::LoadedLower
+                ]
+            )
+            .is_some());
+        debug_assert!(layer
+            .edit_chunk(
+                TlcPos(Point3 {
+                    x: -1,
+                    y: -1,
+                    z: -1
+                }),
+                [
+                    BufferChunkState::Unloaded,
+                    BufferChunkState::Unloaded,
+                    BufferChunkState::Unloaded
+                ]
+            )
+            .is_none());
+        debug_assert!(layer
+            .edit_chunk(
+                TlcPos(Point3 {
+                    x: -1,
+                    y: -1,
+                    z: -1
+                }),
+                [
+                    BufferChunkState::LoadedUpper,
+                    BufferChunkState::LoadedUpper,
+                    BufferChunkState::LoadedUpper
+                ]
+            )
+            .is_none());
+        debug_assert!(layer
+            .edit_chunk(
+                TlcPos(Point3 {
+                    x: 31,
+                    y: 31,
+                    z: 31,
+                }),
+                [
+                    BufferChunkState::LoadedUpper,
+                    BufferChunkState::LoadedUpper,
+                    BufferChunkState::LoadedUpper
+                ]
+            )
+            .is_some());
+        debug_assert!(layer
+            .edit_chunk(
+                TlcPos(Point3 {
+                    x: 31,
+                    y: 31,
+                    z: 31,
+                }),
+                [
+                    BufferChunkState::LoadedLower,
+                    BufferChunkState::LoadedLower,
+                    BufferChunkState::LoadedLower
+                ]
+            )
+            .is_none());
+        debug_assert!(layer
+            .edit_chunk(
+                TlcPos(Point3 {
+                    x: 31,
+                    y: 31,
+                    z: 31,
+                }),
+                [
+                    BufferChunkState::Unloaded,
+                    BufferChunkState::Unloaded,
+                    BufferChunkState::Unloaded
+                ]
+            )
+            .is_none());
     }
 }
