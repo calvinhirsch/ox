@@ -18,121 +18,102 @@ impl<D> Hash for ChunkLoadQueueItem<D> {
 }
 
 mod layer_chunk {
-    use std::cell::UnsafeCell;
+    use getset::Getters;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum LayerChunkState {
+    pub enum Validity {
         Valid,
-        Invalid, // Data is not being used by any loading thread but is not valid/correct
-        Missing, // Data is being used by a chunk loading thread
+        Invalid,
     }
 
-    /// Chunk data from a single memory grid layer. It is safe to read the state and it is safe to
-    /// read the data if the state is not Missing. If the variant is Missing, the data is considered borrowed by a
-    /// chunk loading thread, and thus should not be read. The variant should only ever be changed in the main thread
-    /// when no loading thread has borrowed this, which should be orchestrated by a chunk loader.
-    #[derive(Debug)]
-    pub struct LayerChunk<T> {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Getters)]
+    pub struct PresentLayerChunk<T> {
         data: T,
-        state: UnsafeCell<LayerChunkState>,
+        #[get]
+        validity: Validity,
     }
+
+    /// Chunk data from a single memory grid layer
+    #[derive(Debug)]
+    pub struct LayerChunk<T>(Option<PresentLayerChunk<T>>);
 
     impl<T> LayerChunk<T> {
         pub fn new(data: T) -> Self {
-            LayerChunk {
+            Self(Some(PresentLayerChunk {
                 data,
-                state: UnsafeCell::new(LayerChunkState::Invalid),
-            }
+                validity: Validity::Invalid,
+            }))
         }
 
         pub fn new_valid(data: T) -> Self {
-            LayerChunk {
+            Self(Some(PresentLayerChunk {
                 data,
-                state: UnsafeCell::new(LayerChunkState::Valid),
-            }
+                validity: Validity::Valid,
+            }))
         }
 
-        pub fn state(&self) -> LayerChunkState {
-            unsafe { *self.state.get() }
-        }
-
-        /// Returns referece data if it's valid
+        /// Returns referece data if it's valid (not invalid or missing)
         pub fn get(&self) -> Option<&T> {
-            match self.state() {
-                LayerChunkState::Valid => Some(&self.data),
-                _ => None,
-            }
+            self.0
+                .as_ref()
+                .map(|c| match c.validity {
+                    Validity::Valid => Some(&c.data),
+                    Validity::Invalid => None,
+                })
+                .flatten()
         }
 
-        /// Returns mutable reference to data if it's valid
+        /// Returns mutable reference to data if it's valid (not invalid or missing)
         pub fn get_mut(&mut self) -> Option<&mut T> {
-            match self.state() {
-                LayerChunkState::Valid => Some(&mut self.data),
-                _ => None,
-            }
+            self.0
+                .as_mut()
+                .map(|c| match c.validity {
+                    Validity::Valid => Some(&mut c.data),
+                    Validity::Invalid => None,
+                })
+                .flatten()
         }
 
-        /// Get data for loading, should be called from within a chunk loading thread
-        pub unsafe fn get_mut_for_loading(&mut self) -> &mut T {
-            debug_assert!(
-                matches!(self.state(), LayerChunkState::Missing),
-                "Expected missing, got state {:?}",
-                self.state()
-            );
-            &mut self.data
-        }
-
-        pub unsafe fn get_for_loading(&self) -> &T {
-            debug_assert!(
-                matches!(self.state(), LayerChunkState::Missing),
-                "Expected missing, got state {:?}",
-                self.state()
-            );
-            &self.data
-        }
-
-        /// Set the state to "invalid"--if the current state is "missing", will return an Err(())
-        pub unsafe fn set_invalid(&mut self) -> Result<(), ()> {
-            match self.state() {
-                LayerChunkState::Missing => Err(()),
-                LayerChunkState::Valid => {
-                    *self.state.get_mut() = LayerChunkState::Invalid;
-                    Ok(())
+        /// Set the state to "invalid". Returns Err if data is missing.
+        pub fn set_invalid(&mut self) -> Result<(), ()> {
+            if let Some(c) = self.0.as_mut() {
+                match c.validity {
+                    Validity::Valid => {
+                        c.validity = Validity::Invalid;
+                    }
+                    Validity::Invalid => {}
                 }
-                LayerChunkState::Invalid => Ok(()),
+                Ok(())
+            } else {
+                Err(())
             }
         }
 
-        /// Set the state to "missing". State should be "invalid" to do this according to the chunk loading process.
-        /// Setting the state to missing means that a chunk loading thread has borrowed this data. `self` is `Pin`
-        /// here because if that ever happens, the data must never move, because the chunk loading thread keeps a
-        /// raw pointer to this. If the data ever moves, that pointer will be invalidated.
-        pub unsafe fn set_missing(&mut self) {
-            debug_assert!(
-                matches!(self.state(), LayerChunkState::Invalid),
-                "Expected invalid, got state {:?}",
-                self.state()
-            );
-            *self.state.get_mut() = LayerChunkState::Missing;
+        /// Take data for loading. State should be "invalid" to do this according to the chunk loading process.
+        pub fn take(&mut self) -> Result<T, ()> {
+            match self.0.take() {
+                Some(c) => {
+                    debug_assert!(c.validity == Validity::Invalid);
+                    Ok(c.data)
+                }
+                None => Err(()),
+            }
         }
 
-        /// Set the state to "valid". State should be "missing" to do this according to the chunk loading process
-        pub unsafe fn set_valid(&mut self) {
-            debug_assert!(
-                matches!(self.state(), LayerChunkState::Missing),
-                "Expected missing, got state {:?}",
-                self.state()
-            );
-            *self.state.get_mut() = LayerChunkState::Valid;
-        }
+        // pub fn return_data(&mut self, data: T) -> Result<(), ()> {
+        //     match self.0 {
+        //         None => {self = Self::new_valid(data); Ok(()) },
+        //         Some(_) => Err(())
+        //     }
+        // }
     }
 }
-pub use layer_chunk::{LayerChunk, LayerChunkState};
+pub use layer_chunk::LayerChunk;
 
 /// Chunk data that can be loaded with a `ChunkLoader`. The `ChunkLoader` will first `mark_invalid` when
 /// the chunk is queued, then `take_data_for_loading`, send it to a separate thread, load the data, then
 /// when loading is complete, `mark_valid` and release its pointer.
-pub unsafe trait BorrowChunkForLoading<BC, QI> {
+pub trait BorrowChunkForLoading<BC, QI> {
     // TODO: derive macro
 
     /// Called when chunk is ready to be loaded to see if the load still needs to happen.
@@ -153,15 +134,15 @@ pub unsafe trait BorrowChunkForLoading<BC, QI> {
     ) -> BC;
 }
 
-pub unsafe trait BorrowedChunk: Send {
+pub trait BorrowedChunk: Send {
     type MemoryGrid;
 
     // TODO: derive macro
 
-    /// Things to do when done loading. Called by chunk loader from the main thread once `load` has been run.
-    /// Should always include calling `set_valid` on all `LayerChunk`s. May also include additional steps like,
-    /// for voxel data, setting up a transfer region to update the chunk data on the GPU.
-    unsafe fn done_loading(&mut self, grid: &mut Self::MemoryGrid);
+    /// Return borrowed data to its original place, usually after chunk loading is done.
+    /// May also include additional steps like, for voxel data, setting up a transfer
+    /// region to update the chunk data on the GPU.
+    fn return_data(self, grid: &mut Self::MemoryGrid);
 }
 
 #[derive(Debug, Getters, CopyGetters)]
@@ -248,11 +229,9 @@ where
         for thread_slot in self.active_threads.iter_mut() {
             if let Some(receiver) = thread_slot {
                 match receiver.try_recv() {
-                    Ok(mut chunk_data) => {
+                    Ok(chunk_data) => {
                         self.finished_loading_last += 1;
-                        unsafe {
-                            chunk_data.done_loading(&mut world.mem_grid);
-                        }
+                        chunk_data.return_data(&mut world.mem_grid);
                         *thread_slot = None;
                     }
                     Err(TryRecvError::Disconnected) => {
@@ -345,9 +324,12 @@ mod tests {
     const MG_SIZE: usize = 32;
     type TestMemoryGrid = MemoryGridLayer<bool, (), ()>;
 
-    struct BorrowedTestChunkEditor(*mut LayerChunk<bool>);
+    struct BorrowedTestChunkEditor {
+        data: bool,
+        chunk_idx: usize,
+    }
 
-    unsafe impl<'a> BorrowChunkForLoading<BorrowedTestChunkEditor, ()>
+    impl<'a> BorrowChunkForLoading<BorrowedTestChunkEditor, ()>
         for DefaultLayerChunkEditor<'a, bool, (), ()>
     {
         fn should_still_load(&self, _: &()) -> bool {
@@ -355,20 +337,22 @@ mod tests {
         }
 
         fn mark_invalid(&mut self) -> Result<(), ()> {
-            unsafe { self.chunk.set_invalid() }
+            self.chunk.set_invalid()
         }
 
         fn take_data_for_loading(&mut self, _: &()) -> BorrowedTestChunkEditor {
-            unsafe { self.chunk.set_missing() }
-            BorrowedTestChunkEditor(self.chunk)
+            BorrowedTestChunkEditor {
+                data: self.chunk.take().unwrap(),
+                chunk_idx: self.chunk_idx,
+            }
         }
     }
 
-    unsafe impl Send for BorrowedTestChunkEditor {}
-    unsafe impl BorrowedChunk for BorrowedTestChunkEditor {
+    impl BorrowedChunk for BorrowedTestChunkEditor {
         type MemoryGrid = TestMemoryGrid;
-        unsafe fn done_loading(&mut self, _: &mut Self::MemoryGrid) {
-            (&mut *self.0).set_valid()
+
+        fn return_data(self, grid: &mut Self::MemoryGrid) {
+            grid.chunks_mut()[self.chunk_idx] = LayerChunk::new_valid(self.data)
         }
     }
 
@@ -413,9 +397,8 @@ mod tests {
         );
 
         fn load_f(editor: &mut BorrowedTestChunkEditor, _: ChunkLoadQueueItem<()>, _: ()) {
-            let val = unsafe { (&mut *editor.0).get_mut_for_loading() };
-            assert!(!*val);
-            *val = true;
+            assert!(!editor.data);
+            editor.data = true;
         }
 
         let min_chunk = -(world.mem_grid.size() as i64) / 2 + 1;
@@ -480,9 +463,8 @@ mod tests {
         let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
 
         fn load_f(editor: &mut BorrowedTestChunkEditor, _: ChunkLoadQueueItem<()>, _: ()) {
-            let val = unsafe { (&mut *editor.0).get_mut_for_loading() };
-            assert!(!*val);
-            *val = true;
+            assert!(!editor.data);
+            editor.data = true;
         }
 
         let min_chunk = -(world.mem_grid.size() as i64) / 2 + 1;

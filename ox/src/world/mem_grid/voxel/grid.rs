@@ -1,8 +1,8 @@
 use super::lod::{
-    BorrowedLodChunkEditorMaybeUnloaded, LodChunkEditorMaybeUnloaded, VoxelLODCreateParams,
+    BorrowedLodChunkMaybeUnloaded, LodChunkEditorMaybeUnloaded, VoxelLODCreateParams,
     VoxelMemoryGridLod,
 };
-use crate::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunkState};
+use crate::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem};
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::renderer::component::voxels::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
@@ -236,7 +236,7 @@ impl<VE: VoxelTypeEnum, const N: usize> EditMemoryGridChunk<VE> for VoxelMemoryG
     }
 }
 
-unsafe impl<'a, const N: usize, VE: VoxelTypeEnum>
+impl<'a, const N: usize, VE: VoxelTypeEnum>
     BorrowChunkForLoading<BorrowedChunkVoxelEditor<VE, N>, VoxelChunkLoadQueueItemData<N>>
     for ChunkVoxelEditor<'a, VE, N>
 {
@@ -273,11 +273,7 @@ unsafe impl<'a, const N: usize, VE: VoxelTypeEnum>
                 false => *lod = None,
             }
         }
-        unsafe {
-            self.mark_all_lods_missing();
-        }
-
-        BorrowedChunkVoxelEditor::new(self)
+        BorrowedChunkVoxelEditor::new(self).unwrap()
     }
 
     fn mark_invalid(&mut self) -> Result<(), ()> {
@@ -294,14 +290,6 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
             }
         }
         r
-    }
-
-    pub unsafe fn mark_all_lods_missing(&mut self) {
-        for lod_o in self.lods.iter_mut() {
-            if let Some(lod) = lod_o {
-                unsafe { (&mut **lod.data_mut()).set_missing() }
-            }
-        }
     }
 
     /// Requires that this TLC has full LOD. Requires both position and index of the voxel.
@@ -357,54 +345,39 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
 
         Ok(())
     }
-
-    pub fn no_missing_lods(&self) -> bool {
-        for lod in self.lods.iter() {
-            if let Some(lod) = lod {
-                if matches!(lod.data().state(), LayerChunkState::Missing) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    pub fn all_lods_valid(&self) -> bool {
-        self.lods.iter().all(|l| {
-            l.as_ref()
-                .map(|l| matches!(l.data().state(), LayerChunkState::Valid))
-                .unwrap_or(true)
-        })
-    }
 }
 
 #[derive(Getters, Debug)]
 pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
     #[get = "pub"]
-    lods: [Option<BorrowedLodChunkEditorMaybeUnloaded<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+    lods: [Option<BorrowedLodChunkMaybeUnloaded<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
-unsafe impl<VE: VoxelTypeEnum, const N: usize> Send for BorrowedChunkVoxelEditor<VE, N> {}
-
-unsafe impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunk for BorrowedChunkVoxelEditor<VE, N> {
+impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunk for BorrowedChunkVoxelEditor<VE, N> {
     type MemoryGrid = VoxelMemoryGrid<N>;
 
-    unsafe fn done_loading(&mut self, grid: &mut VoxelMemoryGrid<N>) {
-        unsafe {
-            self.set_all_lods_valid();
-        }
+    fn return_data(self, grid: &mut VoxelMemoryGrid<N>) {
         self.queue_to_sync_to_gpu(grid);
+        for (lod, editor_lod) in grid.lods.iter_mut().zip(self.lods) {
+            if let Some(elod) = editor_lod {
+                elod.return_data(lod);
+            }
+        }
     }
 }
 
 impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
-    pub fn new(ce: &mut ChunkVoxelEditor<VE, N>) -> Self {
-        Self {
-            lods: ce.lods.each_mut().map(|lod_o| {
-                lod_o
-                    .as_mut()
-                    .map(|lod| BorrowedLodChunkEditorMaybeUnloaded::new(lod))
-            }),
+    pub fn new(ce: &mut ChunkVoxelEditor<VE, N>) -> Result<Self, ()> {
+        let lods = ce.lods.each_mut().map(|lod_o| match lod_o.as_mut() {
+            None => Ok(None),
+            Some(lod) => BorrowedLodChunkMaybeUnloaded::new(lod).map(|e| Some(e)),
+        });
+        if lods.iter().any(|l| l.is_err()) {
+            Err(())
+        } else {
+            Ok(Self {
+                lods: lods.map(|l| l.unwrap()),
+            })
         }
     }
 
@@ -435,18 +408,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
             if let Some(lod_data) = lod {
                 let lvl = lod_data.lvl();
                 let sublvl = lod_data.sublvl();
-                debug_assert!(
-                    matches!(
-                        unsafe { &**lod_data.data() }.state(),
-                        LayerChunkState::Missing
-                    ),
-                    "Trying to load into already loaded chunk {:?} ({}, {})",
-                    pos,
-                    lod_data.lvl(),
-                    lod_data.sublvl(),
-                ); // Should have been marked missing before loading
-
-                let data = unsafe { (&mut **lod_data.data_mut()).get_mut_for_loading() };
+                let data = lod_data.data_mut();
 
                 // Need to load the info in this chunk
                 match data.check_voxel_ids_mut() {
@@ -454,10 +416,12 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                         if let Some(last_vox_lod) = last_vox_lod.as_ref() {
                             // Load voxels based on higher fidelity LOD that is already loaded
                             let last_vox_data = {
-                                let data =
-                                    lods_to_index[last_vox_lod.index].as_ref().unwrap().data();
-                                let data = unsafe { (&**data).get_for_loading() };
-                                match data.check_voxel_ids() {
+                                match lods_to_index[last_vox_lod.index]
+                                    .as_ref()
+                                    .unwrap()
+                                    .data()
+                                    .check_voxel_ids()
+                                {
                                     LodChunkDataVariant::WithoutVoxels(_) => unreachable!(),
                                     LodChunkDataVariant::WithVoxels(data) => data,
                                 }
@@ -492,14 +456,13 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                     }
                     LodChunkDataVariantMut::WithoutVoxels(data) => {
                         // If this chunk only has a bitmask, update from previous LOD bitmask
-                        let lower_lod_data = lods_to_index
-                            [first_bitmask_lod.as_ref().unwrap().index]
-                            .as_ref()
-                            .unwrap()
-                            .data();
                         update_bitmask_from_lower_lod_untracked(
                             data,
-                            unsafe { (&**lower_lod_data).get_for_loading() }.bitmask(),
+                            lods_to_index[first_bitmask_lod.as_ref().unwrap().index]
+                                .as_ref()
+                                .unwrap()
+                                .data()
+                                .bitmask(),
                             lvl,
                             sublvl,
                             first_bitmask_lod.as_ref().unwrap().lvl,
@@ -522,15 +485,15 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
         });
     }
 
-    pub unsafe fn set_all_lods_valid(&mut self) {
-        for lod_o in self.lods.iter_mut() {
-            if let Some(lod) = lod_o {
-                unsafe {
-                    (&mut **lod.data_mut()).set_valid();
-                }
-            }
-        }
-    }
+    // pub unsafe fn set_all_lods_valid(&mut self) {
+    //     for lod_o in self.lods.iter_mut() {
+    //         if let Some(lod) = lod_o {
+    //             unsafe {
+    //                 (&mut **lod.data_mut()).set_valid();
+    //             }
+    //         }
+    //     }
+    // }
 
     // For each LOD of this chunk, add a region to the `updated_regions` covering this
     // chunk's data so that it is sync'd to GPU
@@ -585,6 +548,7 @@ mod tests {
     use num_derive::{FromPrimitive, ToPrimitive};
 
     use crate::{
+        loader::LayerChunk,
         renderer::test_context::TestContext,
         voxel_type::{Material, VoxelTypeDefinition},
         world::{camera::Camera, mem_grid::voxel::ChunkBitmask, World},
@@ -692,10 +656,7 @@ mod tests {
             for lod in 1..=2 {
                 let mut editor = world.edit_chunk::<Block>(pos).unwrap();
                 let chunk = editor.lods[lod].as_mut().unwrap().data_mut();
-                unsafe {
-                    chunk.set_missing();
-                    chunk.set_valid();
-                }
+                **chunk = LayerChunk::new_valid(chunk.take().unwrap());
             }
             {
                 match world.edit_chunk::<Block>(pos).unwrap().lods[1]

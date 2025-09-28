@@ -1,4 +1,6 @@
-use crate::loader::{ChunkLoadQueueItem, LayerChunk};
+use std::marker::PhantomData;
+
+use crate::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
 use crate::world::mem_grid::utils::{amod, cubed, index_for_pos};
 use crate::world::mem_grid::{EditMemoryGridChunk, MemoryGrid, MemoryGridLoadChunks};
 use crate::world::{BufferChunkState, TlcPos, TlcVector};
@@ -191,6 +193,47 @@ impl<C, MD, S> EditMemoryGridChunk for MemoryGridLayer<C, MD, S> {
             metadata: &self.metadata,
             layer_state: &mut self.state,
         })
+    }
+}
+
+impl<'a, C, MD, S> BorrowChunkForLoading<DefaultBorrowedLayerChunk<C, MD, S>, ()>
+    for DefaultLayerChunkEditor<'a, C, MD, S>
+{
+    fn should_still_load(&self, _: &()) -> bool {
+        true
+    }
+
+    fn mark_invalid(&mut self) -> Result<(), ()> {
+        self.chunk.set_invalid()
+    }
+
+    fn take_data_for_loading(
+        &mut self,
+        _: &(),
+        // metadata: &MD,
+    ) -> DefaultBorrowedLayerChunk<C, MD, S> {
+        DefaultBorrowedLayerChunk {
+            chunk: self.chunk.take().unwrap(),
+            chunk_idx: self.chunk_idx,
+            _md: PhantomData,
+            _s: PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DefaultBorrowedLayerChunk<C, MD = (), S = ()> {
+    pub chunk: C,
+    pub chunk_idx: usize,
+    _md: PhantomData<MD>,
+    _s: PhantomData<S>,
+}
+
+impl<C: Send, MD: Send, S: Send> BorrowedChunk for DefaultBorrowedLayerChunk<C, MD, S> {
+    type MemoryGrid = MemoryGridLayer<C, MD, S>;
+
+    fn return_data(self, grid: &mut Self::MemoryGrid) {
+        grid.chunks_mut()[self.chunk_idx] = LayerChunk::new(self.chunk);
     }
 }
 

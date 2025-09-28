@@ -11,7 +11,9 @@ pub struct VoxelTypeDefinition<A> {
 
 /// Trait for enum of all block types that must be defined. The first value (repr = 0) is assumed to
 /// be an empty block (e.g. 'air').
-pub trait VoxelTypeEnum: Sequence + Copy + FromPrimitive + ToPrimitive + Debug + Eq + Hash {
+pub trait VoxelTypeEnum:
+    Sequence + Copy + FromPrimitive + ToPrimitive + Debug + Eq + Hash + Send
+{
     type VoxelAttributes;
 
     fn def(&self) -> VoxelTypeDefinition<Self::VoxelAttributes>;

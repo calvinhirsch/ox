@@ -3,7 +3,9 @@ use cgmath::{Array, Point3, Vector3};
 use hashbrown::HashMap;
 use ox::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
 use ox::ray::ChunkEditorVoxels;
-use ox::world::mem_grid::layer::{DefaultLayerChunkEditor, MemoryGridLayer};
+use ox::world::mem_grid::layer::{
+    DefaultBorrowedLayerChunk, DefaultLayerChunkEditor, MemoryGridLayer,
+};
 use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::{
     BorrowedChunkVoxelEditor, ChunkVoxelEditor, VoxelChunkLoadQueueItemData,
@@ -24,11 +26,6 @@ pub struct Entity {
 #[derive(Debug, Clone)]
 pub struct Entities {
     pub entities: Vec<Entity>,
-}
-impl Default for Entities {
-    fn default() -> Self {
-        Entities { entities: vec![] }
-    }
 }
 
 pub type EntityMemoryGrid = MemoryGridLayer<Entities>;
@@ -189,7 +186,7 @@ impl<'a, const N: usize> ChunkEditorVoxels<Block, N> for WorldChunkEditor<'a, N>
 #[derive(Debug)]
 pub struct BorrowedWorldChunkEditor<const N: usize> {
     voxel: BorrowedChunkVoxelEditor<Block, N>,
-    entity: Option<*mut LayerChunk<Entities>>,
+    entity: Option<DefaultBorrowedLayerChunk<Entities>>,
 }
 
 impl<const N: usize> EditMemoryGridChunk for WorldMemoryGrid<N> {
@@ -209,7 +206,7 @@ impl<const N: usize> EditMemoryGridChunk for WorldMemoryGrid<N> {
     }
 }
 
-unsafe impl<'a, const N: usize>
+impl<'a, const N: usize>
     BorrowChunkForLoading<BorrowedWorldChunkEditor<N>, WorldChunkLoadQueueItemData<N>>
     for WorldChunkEditor<'a, N>
 {
@@ -224,7 +221,7 @@ unsafe impl<'a, const N: usize>
     fn mark_invalid(&mut self) -> Result<(), ()> {
         let mut r = Ok(());
         if let Some(entity_data) = self.entity.as_mut() {
-            r = r.and(unsafe { entity_data.chunk.set_invalid() });
+            r = r.and(entity_data.chunk.set_invalid());
         }
         r = r.and(self.voxel.mark_invalid());
         r
@@ -234,11 +231,8 @@ unsafe impl<'a, const N: usize>
         &mut self,
         queue_item: &WorldChunkLoadQueueItemData<N>,
     ) -> BorrowedWorldChunkEditor<N> {
-        if let Some(e) = self.entity.as_mut() {
-            unsafe { e.chunk.set_missing() };
-        }
         BorrowedWorldChunkEditor {
-            entity: self.entity.as_mut().map(|e| e.chunk as *mut _),
+            entity: self.entity.as_mut().map(|e| e.take_data_for_loading(&())),
             voxel: self
                 .voxel
                 .take_data_for_loading(queue_item.voxel.as_ref().unwrap()),
@@ -246,18 +240,15 @@ unsafe impl<'a, const N: usize>
     }
 }
 
-unsafe impl<const N: usize> Send for BorrowedWorldChunkEditor<N> {}
-
-unsafe impl<const N: usize> BorrowedChunk for BorrowedWorldChunkEditor<N> {
+impl<const N: usize> BorrowedChunk for BorrowedWorldChunkEditor<N> {
     type MemoryGrid = WorldMemoryGrid<N>;
 
-    unsafe fn done_loading(&mut self, grid: &mut Self::MemoryGrid) {
+    fn return_data(self, grid: &mut Self::MemoryGrid) {
         if let Some(e) = self.entity {
-            unsafe {
-                (&mut *e).set_valid();
-            }
+            e.return_data(&mut grid.entity);
         }
-        self.voxel.done_loading(&mut grid.voxel);
+
+        self.voxel.return_data(&mut grid.voxel);
     }
 }
 
@@ -270,7 +261,7 @@ pub fn load_chunk<const N: usize>(
         editor.voxel.load_new(chunk.pos, generate_chunk, &params);
     }
     if let Some(e) = editor.entity.as_mut() {
-        unsafe { (&mut **e).get_mut_for_loading() }.entities.clear();
+        e.chunk.entities.clear();
     }
 }
 
