@@ -125,6 +125,8 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
         let mut queue = HashMap::new();
 
+        dbg!(shift);
+
         for item in self.voxel.shift(shift) {
             debug_assert!(queue
                 .insert(
@@ -140,7 +142,12 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
                 .is_none())
         }
 
+        dbg!(&queue);
+
         for item in self.entity.shift(shift) {
+            // let e = queue
+            //     .get_mut(&item.pos.0)
+            //     .expect(format!("{:?}", &item.pos.0).as_str());
             let e = queue.entry(item.pos.0).or_insert(ChunkLoadQueueItem {
                 pos: item.pos,
                 data: WorldChunkLoadQueueItemData {
@@ -150,6 +157,9 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
             });
             e.data.entity = Some(());
         }
+
+        dbg!(&queue);
+        panic!();
 
         queue.into_values().collect()
     }
@@ -204,8 +214,11 @@ unsafe impl<'a, const N: usize>
     for WorldChunkEditor<'a, N>
 {
     fn should_still_load(&self, queue_item: &WorldChunkLoadQueueItemData<N>) -> bool {
-        self.voxel
-            .should_still_load(queue_item.voxel.as_ref().unwrap())
+        if let Some(voxel) = queue_item.voxel.as_ref() {
+            self.voxel.should_still_load(voxel)
+        } else {
+            true
+        }
     }
 
     fn mark_invalid(&mut self) -> Result<(), ()> {
