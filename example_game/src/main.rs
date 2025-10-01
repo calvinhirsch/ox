@@ -43,7 +43,7 @@ mod world;
 use crate::world::{load_chunk, WorldChunkLoadQueueItemData, WorldMemoryGrid};
 use world::{BorrowedWorldChunkEditor, CHUNK_SIZE};
 
-pub const CAMERA_SPEED: f32 = 40.;
+pub const CAMERA_SPEED: f32 = 10.;
 pub const CAMERA_SENS: f32 = 1.;
 
 const N_LODS: usize = 5;
@@ -220,7 +220,7 @@ fn main() {
     let mut loader: ChunkLoader<
         WorldChunkLoadQueueItemData<N_LODS>,
         BorrowedWorldChunkEditor<N_LODS>,
-    > = ChunkLoader::new(ChunkLoaderParams { n_threads: 8 });
+    > = ChunkLoader::new(ChunkLoaderParams { n_threads: 2 });
 
     world.queue_load_all(&mut loader); // load all chunks in render distance
 
@@ -368,6 +368,13 @@ fn main() {
                         .camera
                         .update_staging_buffer(world.camera());
                     dbg!(Instant::now() - frame_start);
+                    dbg!(world
+                        .mem_grid
+                        .voxel
+                        .lods()
+                        .iter()
+                        .map(|lod| &lod.state().updated_regions)
+                        .collect::<Vec<_>>());
                     render_editor
                         .component_set
                         .voxel_data

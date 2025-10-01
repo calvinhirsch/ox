@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::u128;
 
 use cgmath::{Array, Point3, Vector3};
 use enum_iterator::Sequence;
@@ -116,24 +117,54 @@ impl From<BufferCopy> for BufferCopyCmp {
 }
 
 fn assert_updates_eq(u1: Vec<VoxelLODUpdate>, u2: Vec<VoxelLODUpdate>) {
+    let bm_lookup1: HashMap<BufferCopyCmp, VoxelLODUpdate> = u1
+        .iter()
+        .cloned()
+        .map(|u| (u.bitmask_updated_region.clone().into(), u))
+        .collect();
+    let bm_lookup2: HashMap<BufferCopyCmp, VoxelLODUpdate> = u2
+        .iter()
+        .cloned()
+        .map(|u| (u.bitmask_updated_region.clone().into(), u))
+        .collect();
+
     assert_eq!(
-        u1.iter()
-            .cloned()
-            .map(|u| u.bitmask_updated_region.into())
-            .collect::<HashSet<BufferCopyCmp>>(),
-        u2.iter()
-            .cloned()
-            .map(|u| u.bitmask_updated_region.into())
-            .collect::<HashSet<BufferCopyCmp>>(),
+        bm_lookup1.keys().collect::<HashSet<_>>(),
+        bm_lookup2.keys().collect::<HashSet<_>>()
     );
+    for (k, v) in bm_lookup1.iter() {
+        assert_eq!(
+            *v.bitmask,
+            *bm_lookup2.get(k).unwrap().bitmask,
+            "for chunk {:?} (idx {})",
+            k,
+            k.dst_offset / k.size,
+        );
+    }
+
+    let vox_lookup1: HashMap<BufferCopyCmp, VoxelIDUpdate> = u1
+        .iter()
+        .cloned()
+        .filter_map(|u| u.id_update.map(|u| (u.updated_region.clone().into(), u)))
+        .collect();
+    let vox_lookup2: HashMap<BufferCopyCmp, VoxelIDUpdate> = u2
+        .iter()
+        .cloned()
+        .filter_map(|u| u.id_update.map(|u| (u.updated_region.clone().into(), u)))
+        .collect();
     assert_eq!(
-        u1.into_iter()
-            .filter_map(|u| u.id_update.map(|iu| iu.updated_region.into()))
-            .collect::<HashSet<BufferCopyCmp>>(),
-        u2.into_iter()
-            .filter_map(|u| u.id_update.map(|iu| iu.updated_region.into()))
-            .collect::<HashSet<BufferCopyCmp>>(),
+        vox_lookup1.keys().collect::<HashSet<_>>(),
+        vox_lookup2.keys().collect::<HashSet<_>>()
     );
+    for (k, v) in vox_lookup1.iter() {
+        assert_eq!(
+            *v.ids,
+            *vox_lookup2.get(k).unwrap().ids,
+            "for chunk {:?} (idx {})",
+            k,
+            k.dst_offset / k.size,
+        );
+    }
 }
 
 #[test]
@@ -262,12 +293,29 @@ fn test_queue_load_all() {
     let [u_0_0, u_0_1, u_0_2, u_1_0, u_2_0] = world.mem_grid.get_updates();
     let dummy_bitmask = VoxelBitmask::new_vec(0);
     let dummy_ids = VoxelTypeIDs::new_vec(0);
+    let mut u_0_0_bitmask = vec![VoxelBitmask::new_vec(cubed(64)); cubed(2)];
+    let mut u_0_1_bitmask = vec![VoxelBitmask::new_vec(cubed(32)); cubed(4)];
+    let mut u_0_2_bitmask = vec![VoxelBitmask::new_vec(cubed(16)); cubed(8)];
+    let mut u_1_0_bitmask = vec![VoxelBitmask::new_vec(cubed(8)); cubed(16)];
+    let mut u_2_0_bitmask = vec![VoxelBitmask::new_vec(1); cubed(16)];
+    let mut u_0_0_voxels = vec![VoxelTypeIDs::new_vec(cubed(64)); cubed(2)];
+    let mut u_0_1_voxels = vec![VoxelTypeIDs::new_vec(cubed(32)); cubed(4)];
+    let mut u_0_2_voxels = vec![VoxelTypeIDs::new_vec(cubed(16)); cubed(8)];
+    let mut u_1_0_voxels = vec![VoxelTypeIDs::new_vec(cubed(8)); cubed(16)];
 
     // LOD 0 0 --- offset = 0
+    for i in 0..u_0_0_bitmask[0].len() {
+        u_0_0_bitmask[0][i] = VoxelBitmask { mask: u128::MAX };
+    }
+    for i in 0..u_0_0_voxels[0].len() {
+        u_0_0_voxels[0][i] = VoxelTypeIDs {
+            indices: [Block::SOLID as u8; 128 / 8],
+        };
+    }
     assert_updates_eq(
         u_0_0,
         vec![VoxelLODUpdate {
-            bitmask: &dummy_bitmask,
+            bitmask: &u_0_0_bitmask[0],
             bitmask_updated_region: BufferCopy {
                 src_offset: 0,
                 dst_offset: 0,
@@ -275,7 +323,7 @@ fn test_queue_load_all() {
                 ..Default::default()
             },
             id_update: Some(VoxelIDUpdate {
-                ids: &dummy_ids,
+                ids: &u_0_0_voxels[0],
                 updated_region: BufferCopy {
                     src_offset: 0,
                     dst_offset: 0,
@@ -286,31 +334,53 @@ fn test_queue_load_all() {
         }],
     );
 
-    let gen_update =
-        |x: u64, y: u64, z: u64, grid_size: u64, n_vox: u64, ids: bool| VoxelLODUpdate {
-            bitmask: &dummy_bitmask,
-            bitmask_updated_region: BufferCopy {
-                src_offset: 0,
-                dst_offset: (x + y * squared(grid_size) + z * grid_size) * (n_vox / 8).max(16),
-                size: (n_vox + 7) / 8,
-                ..Default::default()
+    fn gen_update<'a>(
+        x: u64,
+        y: u64,
+        z: u64,
+        grid_size: u64,
+        n_vox: u64,
+        ids: bool,
+        dummy_bitmask: &'a Vec<VoxelBitmask>,
+        dummy_ids: &'a Vec<VoxelTypeIDs>,
+    ) -> (usize, VoxelLODUpdate<'a>) {
+        let chunk_idx = x + y * squared(grid_size) + z * grid_size;
+        (
+            chunk_idx as usize,
+            VoxelLODUpdate {
+                bitmask: &dummy_bitmask,
+                bitmask_updated_region: BufferCopy {
+                    src_offset: 0,
+                    dst_offset: chunk_idx * (n_vox / 8).max(16),
+                    size: (n_vox + 7) / 8,
+                    ..Default::default()
+                },
+                id_update: if ids {
+                    Some(VoxelIDUpdate {
+                        ids: &dummy_ids,
+                        updated_region: BufferCopy {
+                            src_offset: 0,
+                            dst_offset: chunk_idx * n_vox.max(16),
+                            size: n_vox,
+                            ..Default::default()
+                        },
+                    })
+                } else {
+                    None
+                },
             },
-            id_update: if ids {
-                Some(VoxelIDUpdate {
-                    ids: &dummy_ids,
-                    updated_region: BufferCopy {
-                        src_offset: 0,
-                        dst_offset: (x + y * squared(grid_size) + z * grid_size) * n_vox.max(16),
-                        size: n_vox,
-                        ..Default::default()
-                    },
-                })
-            } else {
-                None
-            },
-        };
+        )
+    }
 
-    let gen_updates = |grid_size: u64, n_vox: u64, offset: u64, ids: bool| {
+    fn gen_updates<'a>(
+        grid_size: u64,
+        n_vox: u64,
+        offset: u64,
+        bitmasks: &'a mut Vec<Vec<VoxelBitmask>>,
+        ids: &'a mut Option<&'a mut Vec<Vec<VoxelTypeIDs>>>,
+        dummy_bitmask: &'a Vec<VoxelBitmask>,
+        dummy_ids: &'a Vec<VoxelTypeIDs>,
+    ) -> Vec<VoxelLODUpdate<'a>> {
         let offset_filter = |v: &u64| {
             if offset == 0 {
                 *v != grid_size
@@ -318,27 +388,99 @@ fn test_queue_load_all() {
                 *v != offset - 1
             }
         };
-        (0..grid_size)
+        let has_ids = ids.is_some();
+        let mut updates = (0..grid_size)
             .filter(offset_filter)
             .flat_map(|x| {
                 (0..grid_size).filter(offset_filter).flat_map(move |y| {
-                    (0..grid_size)
-                        .filter(offset_filter)
-                        .map(move |z| gen_update(x, y, z, grid_size, n_vox, ids))
+                    (0..grid_size).filter(offset_filter).map(move |z| {
+                        gen_update(x, y, z, grid_size, n_vox, has_ids, dummy_bitmask, dummy_ids)
+                    })
                 })
             })
-            .collect::<Vec<_>>()
-    };
+            .collect::<Vec<_>>();
+
+        // set bitmask and voxel IDs in ground truth (we are filling chunks completely)
+        for (idx, _) in updates.iter_mut() {
+            let bitmask_val = VoxelBitmask {
+                mask: if n_vox > 128 { u128::MAX } else { 1 },
+            };
+            for i in 0..bitmasks[*idx].len() {
+                bitmasks[*idx][i] = bitmask_val.clone();
+            }
+            if let Some(ref mut ids) = ids {
+                for i in 0..ids[*idx].len() {
+                    ids[*idx][i] = VoxelTypeIDs {
+                        indices: [Block::SOLID as u8; 128 / 8],
+                    };
+                }
+            }
+        }
+
+        // put references to the correct ground truth in each update
+        for (idx, update) in updates.iter_mut() {
+            update.bitmask = &bitmasks[*idx];
+            if let Some(ref ids) = ids {
+                update.id_update.as_mut().unwrap().ids = &ids[*idx];
+            }
+        }
+
+        updates.into_iter().map(|(_, u)| u).collect()
+    }
 
     // LOD 0 1 --- offset = 3
-    assert_updates_eq(u_0_1, gen_updates(4, cubed(32), 3, true));
+    assert_updates_eq(
+        u_0_1,
+        gen_updates(
+            4,
+            cubed(32),
+            3,
+            &mut u_0_1_bitmask,
+            &mut Some(&mut u_0_1_voxels),
+            &dummy_bitmask,
+            &dummy_ids,
+        ),
+    );
 
     // LOD 0 2 --- offset = 5
-    assert_updates_eq(u_0_2, gen_updates(8, cubed(16), 5, true));
+    assert_updates_eq(
+        u_0_2,
+        gen_updates(
+            8,
+            cubed(16),
+            5,
+            &mut u_0_2_bitmask,
+            &mut Some(&mut u_0_2_voxels),
+            &dummy_bitmask,
+            &dummy_ids,
+        ),
+    );
 
     // LOD 1 0 --- offset = 9
-    assert_updates_eq(u_1_0, gen_updates(16, cubed(8), 9, true));
+    assert_updates_eq(
+        u_1_0,
+        gen_updates(
+            16,
+            cubed(8),
+            9,
+            &mut u_1_0_bitmask,
+            &mut Some(&mut u_1_0_voxels),
+            &dummy_bitmask,
+            &dummy_ids,
+        ),
+    );
 
     // LOD 2 0 --- offset = 9
-    assert_updates_eq(u_2_0, gen_updates(16, 1, 9, false));
+    assert_updates_eq(
+        u_2_0,
+        gen_updates(
+            16,
+            1,
+            9,
+            &mut u_2_0_bitmask,
+            &mut None,
+            &dummy_bitmask,
+            &dummy_ids,
+        ),
+    );
 }

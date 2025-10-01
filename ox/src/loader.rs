@@ -90,14 +90,14 @@ mod layer_chunk {
         }
 
         /// Take data for loading. State should be "invalid" to do this according to the chunk loading process.
-        pub fn take(&mut self) -> Result<T, ()> {
-            match self.0.take() {
-                Some(c) => {
+        pub fn take(&mut self) -> Option<T> {
+            self.0
+                .take()
+                .map(|c| {
                     debug_assert!(c.validity == Validity::Invalid);
-                    Ok(c.data)
-                }
-                None => Err(()),
-            }
+                    Some(c.data)
+                })
+                .flatten()
         }
 
         // pub fn return_data(&mut self, data: T) -> Result<(), ()> {

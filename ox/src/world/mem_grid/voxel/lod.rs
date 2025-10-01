@@ -218,6 +218,7 @@ pub fn update_bitmask_bit_from_lower_lod_untracked(
 
 /// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
 /// bitmask from a lower level. This should not be called when this LOD contains voxel ID data.
+/// Does not save an update region for this change.
 pub fn update_bitmask_from_lower_lod_untracked(
     bitmask: &mut ChunkBitmask,
     lower_lod_bitmask: &ChunkBitmask,
@@ -371,6 +372,8 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
                     lod_block_fill_thresh,
                 );
                 self.voxel_ids[index] = voxel_id.unwrap_or(VE::empty()).id();
+                self.bitmask
+                    .set_block(index, voxel_id.map(|v| v.def().is_visible).unwrap_or(false));
             },
         );
     }
@@ -432,6 +435,19 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
             )
         } else {
             None
+        }
+    }
+
+    /// Overwrite voxel data. This will allow editing of the voxel IDs directly and automatically
+    /// recalculate the full bitmask when VoxelLODChunkEditor is dropped. Please don't resize the
+    /// voxel ID vec.
+    pub fn overwrite<'o, VE: VoxelTypeEnum>(&'o mut self) -> LodChunkOverwriter<'o, VE>
+    where
+        'a: 'o,
+    {
+        LodChunkOverwriter {
+            _t: PhantomData::<VE>,
+            chunk: self.borrow_mut(),
         }
     }
 }
@@ -648,19 +664,6 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
         LodChunkDataWithVoxels {
             bitmask: self.data.bitmask,
             voxel_ids: self.data.voxel_ids,
-        }
-    }
-
-    /// Overwrite voxel data. This will allow editing of the voxel IDs directly and automatically
-    /// recalculate the full bitmask when VoxelLODChunkEditor is dropped. Please don't resize the
-    /// voxel ID vec.
-    pub fn overwrite<'o, VE: VoxelTypeEnum>(&'o mut self) -> LodChunkOverwriter<'o, VE>
-    where
-        'a: 'o,
-    {
-        LodChunkOverwriter {
-            _t: PhantomData::<VE>,
-            editor: self.borrow_mut(),
         }
     }
 
@@ -901,7 +904,7 @@ fn apply_to_voxel_indices_in_lower_lod_for_lvl<F: FnMut(usize)>(
 }
 
 #[derive(Debug, Getters, MutGetters, CopyGetters)]
-pub struct BorrowedLodChunkMaybeUnloaded<VE: VoxelTypeEnum> {
+pub struct BorrowedLodChunk<VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     #[getset(get_mut = "pub", get = "pub")]
     data: LodChunkData,
@@ -913,7 +916,7 @@ pub struct BorrowedLodChunkMaybeUnloaded<VE: VoxelTypeEnum> {
     sublvl: u8,
 }
 
-impl<VE: VoxelTypeEnum> BorrowedLodChunkMaybeUnloaded<VE> {
+impl<VE: VoxelTypeEnum> BorrowedLodChunk<VE> {
     pub fn new(
         LodChunkEditorMaybeUnloaded {
             voxel_type_enum: _,
@@ -922,8 +925,8 @@ impl<VE: VoxelTypeEnum> BorrowedLodChunkMaybeUnloaded<VE> {
             sublvl,
             updated_regions,
         }: &mut LodChunkEditorMaybeUnloaded<VE>,
-    ) -> Result<Self, ()> {
-        Ok(Self {
+    ) -> Option<Self> {
+        Some(Self {
             voxel_type_enum: PhantomData,
             data: data.take()?,
             chunk_idx: updated_regions.chunk_idx,
@@ -933,7 +936,7 @@ impl<VE: VoxelTypeEnum> BorrowedLodChunkMaybeUnloaded<VE> {
     }
 }
 
-impl<VE: VoxelTypeEnum> BorrowedLodChunkMaybeUnloaded<VE> {
+impl<VE: VoxelTypeEnum> BorrowedLodChunk<VE> {
     pub fn return_data(self, lod: &mut VoxelMemoryGridLod) {
         lod.chunks_mut()[self.chunk_idx] = LayerChunk::new_valid(self.data);
     }
@@ -941,13 +944,13 @@ impl<VE: VoxelTypeEnum> BorrowedLodChunkMaybeUnloaded<VE> {
 
 /// Provides access to chunk voxels to edit and recalculates the full bitmask when dropped.
 pub struct LodChunkOverwriter<'a, VE: VoxelTypeEnum> {
-    pub editor: LodChunkEditorWithVoxelsMut<'a>,
+    pub chunk: LodChunkDataWithVoxelsMut<'a>,
     _t: PhantomData<VE>,
 }
 
 impl<'a, VE: VoxelTypeEnum> Drop for LodChunkOverwriter<'a, VE> {
     fn drop(&mut self) {
-        calc_full_bitmask::<VE>(&self.editor.data.voxel_ids, &mut self.editor.data.bitmask);
+        calc_full_bitmask::<VE>(&self.chunk.voxel_ids, &mut self.chunk.bitmask);
     }
 }
 

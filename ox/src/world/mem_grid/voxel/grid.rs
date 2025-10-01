@@ -1,6 +1,5 @@
 use super::lod::{
-    BorrowedLodChunkMaybeUnloaded, LodChunkEditorMaybeUnloaded, VoxelLODCreateParams,
-    VoxelMemoryGridLod,
+    BorrowedLodChunk, LodChunkEditorMaybeUnloaded, VoxelLODCreateParams, VoxelMemoryGridLod,
 };
 use crate::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem};
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
@@ -350,7 +349,7 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
 #[derive(Getters, Debug)]
 pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
     #[get = "pub"]
-    lods: [Option<BorrowedLodChunkMaybeUnloaded<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+    lods: [Option<BorrowedLodChunk<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
 impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunk for BorrowedChunkVoxelEditor<VE, N> {
@@ -370,7 +369,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
     pub fn new(ce: &mut ChunkVoxelEditor<VE, N>) -> Result<Self, ()> {
         let lods = ce.lods.each_mut().map(|lod_o| match lod_o.as_mut() {
             None => Ok(None),
-            Some(lod) => BorrowedLodChunkMaybeUnloaded::new(lod).map(|e| Some(e)),
+            Some(lod) => BorrowedLodChunk::new(lod).map_or(Err(()), |e| Ok(Some(e))),
         });
         if lods.iter().any(|l| l.is_err()) {
             Err(())
@@ -442,7 +441,7 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
                                 pos,
                                 lvl,
                                 sublvl,
-                                data.raw_voxel_ids_mut(),
+                                data.overwrite::<VE>().chunk.raw_voxel_ids_mut(),
                                 metadata.tlc_size(),
                                 metadata.largest_lod().lvl,
                             );
@@ -667,7 +666,7 @@ mod tests {
                     .with_voxel_ids_mut()
                 {
                     LodChunkEditorVariantMut::WithVoxels(mut chunk) => {
-                        chunk.overwrite::<Block>().editor.set_voxel(0, Block::SOLID);
+                        chunk.set_voxel(0, Block::SOLID);
                     }
                     _ => panic!(),
                 }

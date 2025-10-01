@@ -219,12 +219,9 @@ pub trait MemoryGrid: Sized {
     }
 
     fn chunk_loading_priority(&self, chunk_pos: TlcPos<i64>) -> u32 {
-        u32::MAX
-            - (Vector3::from_value(self.size() as f32 / 2.)
-                .cast::<f32>()
-                .unwrap()
-                .distance((chunk_pos.0 - self.start_tlc().0).cast::<f32>().unwrap())
-                * self.size() as f32) as u32
+        let center_pos = Vector3::from_value((self.size() - 1) as f32 / 2.);
+        let chunk_pos = (chunk_pos.0 - self.start_tlc().0).map(|a| a as f32);
+        u32::MAX - (center_pos.distance(chunk_pos) * 10.0) as u32
     }
 }
 

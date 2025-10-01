@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use vulkano::buffer::BufferContents;
 
-#[derive(BufferContents, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(BufferContents, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct VoxelTypeIDs {
     pub indices: [u8; 128 / 8], // ENHANCEMENT: Make this generic somehow so you can use u16 or u32
@@ -19,7 +19,7 @@ impl VoxelTypeIDs {
     }
 }
 
-#[derive(BufferContents, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(BufferContents, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct VoxelBitmask {
     pub mask: u128,
