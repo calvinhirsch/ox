@@ -63,7 +63,6 @@ impl<T: BufferContents + Copy + std::fmt::Debug> DualBufferWithDynamicCopyRegion
     ) {
         let mut write = self.staging.write().unwrap();
 
-        let start = Instant::now();
         for (src, region) in copies {
             // Regions here are in bytes, so we need to rescale them to be indices
             // copy from src to staging buffer
