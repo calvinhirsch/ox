@@ -58,18 +58,24 @@ impl RendererVoxelLOD {
         }
     }
 
-    pub fn update_staging_buffers_and_prep_copy(&mut self, update: VoxelLODUpdate) {
+    pub fn update_staging_buffers_and_prep_copy(&mut self, updates: &Vec<VoxelLODUpdate>) {
         self.bitmask_buffers
             .buffer_scheme
-            .update_staging_buffer_and_prep_copy(update.bitmask, update.bitmask_updated_region);
+            .update_staging_buffer_and_prep_copy(
+                updates
+                    .iter()
+                    .map(|u| (u.bitmask, &u.bitmask_updated_region)),
+            );
         match &mut self.id_buffers {
             None => {}
             Some(vids) => {
-                let id_update = update
-                    .id_update
-                    .expect("Renderer did not receive ID update for LOD that has voxel IDs.");
                 vids.buffer_scheme
-                    .update_staging_buffer_and_prep_copy(id_update.ids, id_update.updated_region);
+                    .update_staging_buffer_and_prep_copy(updates.iter().map(|u| {
+                        let id_u = u.id_update.as_ref().expect(
+                            "Renderer did not receive ID update for LOD that has voxel IDs.",
+                        );
+                        (id_u.ids, &id_u.updated_region)
+                    }));
             }
         };
     }

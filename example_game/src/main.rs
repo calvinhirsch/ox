@@ -115,7 +115,7 @@ fn main() {
                 voxel_resolution: 2,
                 lvl: 0,
                 sublvl: 1,
-                render_area_size: 7,
+                render_area_size: 5,
                 bitmask_binding: 9,
                 voxel_ids_binding: Some(5),
             },
@@ -123,7 +123,7 @@ fn main() {
                 voxel_resolution: 4,
                 lvl: 0,
                 sublvl: 2,
-                render_area_size: 15,
+                render_area_size: 9,
                 bitmask_binding: 10,
                 voxel_ids_binding: Some(6),
             },
@@ -131,7 +131,7 @@ fn main() {
                 voxel_resolution: 8,
                 lvl: 1,
                 sublvl: 0,
-                render_area_size: 31,
+                render_area_size: 17,
                 bitmask_binding: 11,
                 voxel_ids_binding: Some(7),
             },
@@ -139,7 +139,7 @@ fn main() {
                 voxel_resolution: 64,
                 lvl: 2,
                 sublvl: 0,
-                render_area_size: 31,
+                render_area_size: 17,
                 bitmask_binding: 12,
                 voxel_ids_binding: None,
             },
@@ -214,7 +214,7 @@ fn main() {
     );
 
     let tlc_size = voxel_mem_grid.metadata().tlc_size();
-    let mem_grid = WorldMemoryGrid::new(voxel_mem_grid, start_tlc, 7);
+    let mem_grid = WorldMemoryGrid::new(voxel_mem_grid, start_tlc, 5);
     let mem_grid_size = mem_grid.size();
     let mut world = World::new(mem_grid, Camera::new(tlc_size, mem_grid_size), tlc_size, 16);
     let mut loader: ChunkLoader<
@@ -292,13 +292,13 @@ fn main() {
                 dbg!(dt);
                 last_render_time = frame_start;
 
-                // World update
                 world.move_camera(&mut camera_controller, dt, &mut loader); // can only be done before or after editing, not during
                 dbg!(Instant::now() - frame_start);
 
-                let camera_pos = world.camera().clone();
-
                 loader.sync(&mut world, &load_chunk, voxel_md.clone());
+                dbg!(Instant::now() - frame_start);
+
+                let camera_pos = world.camera().clone();
 
                 if left_clicked || right_clicked {
                     match cast_ray(
@@ -365,21 +365,13 @@ fn main() {
                     dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
-                        .camera
-                        .update_staging_buffer(world.camera());
-                    dbg!(Instant::now() - frame_start);
-                    dbg!(world
-                        .mem_grid
-                        .voxel
-                        .lods()
-                        .iter()
-                        .map(|lod| &lod.state().updated_regions)
-                        .collect::<Vec<_>>());
-                    render_editor
-                        .component_set
                         .voxel_data
                         .update_staging_buffers_and_prep_copy(world.mem_grid.voxel.get_updates());
                     dbg!(Instant::now() - frame_start);
+                    render_editor
+                        .component_set
+                        .camera
+                        .update_staging_buffer(world.camera());
                     render_editor
                         .component_set
                         .ubo

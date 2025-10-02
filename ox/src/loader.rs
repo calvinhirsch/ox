@@ -225,7 +225,7 @@ where
         self.skipped_loading_last = 0;
         self.finished_loading_last = 0;
 
-        // Receive chunks that have finished loading and put them in "chunks"
+        // Receive chunks that have finished loading and return their data to `world`
         for thread_slot in self.active_threads.iter_mut() {
             if let Some(receiver) = thread_slot {
                 match receiver.try_recv() {
@@ -244,22 +244,23 @@ where
 
         // Enqueue new chunks for loading until queue is empty or there are no thread slots left
         if !self.queue.is_empty() {
-            let mut requeue = vec![];
+            let mut requeue = vec![]; // chunks to try again next frame
             'threads: for thread_slot in self.active_threads.iter_mut() {
                 if thread_slot.is_none() {
                     loop {
-                        let (item, prio) = self.queue.pop().unwrap();
+                        let (item, prio) = match self.queue.pop() {
+                            None => break 'threads,
+                            Some(x) => x,
+                        };
                         let (sender, receiver) = sync_channel(0);
 
-                        // Get index of current chunk. If this returns None, the chunk no longer is relevant
+                        // Get current chunk. If this returns None, the chunk no longer is relevant
                         // and so we just skip loading it (it remains "invalid")
-                        dbg!(&item);
                         let skipped = if let Some(mut chunk) = world.edit_chunk(item.pos) {
                             if chunk.should_still_load(&item.data) {
                                 match chunk.mark_invalid() {
                                     Ok(()) => {
                                         self.started_loading_last += 1;
-                                        dbg!("loading!");
                                         let mut chunk_data =
                                             chunk.take_data_for_loading(&item.data);
                                         let lp = load_params.clone();
@@ -289,7 +290,6 @@ where
                             true
                         };
                         if skipped {
-                            dbg!("skipped!");
                             self.skipped_loading_last += 1;
                         }
 

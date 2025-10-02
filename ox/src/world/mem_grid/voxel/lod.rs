@@ -290,12 +290,6 @@ pub struct UpdatedRegionsMut<'a> {
     chunk_idx: usize,
 }
 
-// #[derive(Debug, Clone)]
-// pub struct UpdatedRegions<'a> {
-//     regions: &'a Vec<UpdateRegion>,
-//     chunk_idx: usize,
-// }
-
 impl<'a> UpdatedRegionsMut<'a> {
     fn borrow_mut<'b>(&'b mut self) -> UpdatedRegionsMut<'b>
     where
@@ -306,16 +300,6 @@ impl<'a> UpdatedRegionsMut<'a> {
             chunk_idx: self.chunk_idx,
         }
     }
-
-    // fn as_shared<'b>(&'b self) -> UpdatedRegions<'b>
-    // where
-    //     'a: 'b,
-    // {
-    //     UpdatedRegions {
-    //         regions: self.regions,
-    //         chunk_idx: self.chunk_idx,
-    //     }
-    // }
 
     fn add_region(&mut self, voxel_idx: usize, n_voxels: usize) {
         self.regions.push(UpdateRegion {

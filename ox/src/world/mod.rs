@@ -78,7 +78,6 @@ impl<MG: MemoryGrid> World<MG> {
     /// in the virtual memory grid. This involves checking the state of the buffer chunks to
     /// see where chunks on the edge of the loaded area might end up in the vgrid.
     pub fn chunk_vgrid_pos(&self, global_tlc_pos: TlcPos<i64>) -> Option<TlcVector<usize>> {
-        dbg!(global_tlc_pos.0 - self.mem_grid.start_tlc().0.to_vec());
         let mut i = 0;
         if let Point3 {
             x: Some(x),
@@ -103,7 +102,6 @@ impl<MG: MemoryGrid> World<MG> {
                 Some(a as usize)
             }
         }) {
-            dbg!(("vgrid_pos", x, y, z));
             Some(TlcVector(Vector3 { x, y, z }))
         } else {
             None
@@ -228,7 +226,6 @@ impl<MG: MemoryGrid> World<MG> {
     where
         MG: EditMemoryGridChunk<M>,
     {
-        dbg!(self.metadata().buffer_chunk_states);
         self.mem_grid
             .edit_chunk(global_tlc_pos, self.metadata().buffer_chunk_states)
     }

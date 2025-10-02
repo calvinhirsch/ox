@@ -15,7 +15,7 @@
 #define N_BOUNCES 3
 #define N_CASTS 1
 
-#define RENDER_N_TLCS 31
+#define RENDER_N_TLCS 17
 #define N_MATERIAL_ID_BITS 8
 #define N_MATERIALS 3
 
@@ -30,8 +30,8 @@ const uint CHUNK_LVL_BLOCK_SIZE[N_CHUNK_LVLS + 2] = { // Chunk level 0 means wor
 const uint N_SUBLVLS = 3; // sublevels are assumed to group voxels into blocks of size 2^0, 2^1, 2^2, etc.
 const uint RENDER_N_TLCS_SUBLVL[N_SUBLVLS] = { // Render THIS x THIS x THIS top level chunks around player for each sublvl in lvl 0
         3,
-        7,
-        15
+        5,
+        9
     };
 const uint BLOCK_CAPACITY_SUBLVL[N_SUBLVLS] = { // Number of blocks that need to be stored for each sublvl in lvl 0
         cubed(RENDER_N_TLCS_SUBLVL[0] + 1) * cubed(CHUNK_SIZE * CHUNK_SIZE),

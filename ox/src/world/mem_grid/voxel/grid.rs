@@ -184,10 +184,7 @@ impl<const N: usize> MemoryGridLoadChunks for VoxelMemoryGrid<N> {
         &mut self,
         shift: &crate::world::mem_grid::MemGridShift,
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
-        dbg!(&shift);
-        dbg!(self.lods[0].metadata().offsets());
         let r = self.apply_to_lods_and_queue_chunks_mut(|lod| lod.shift(shift));
-        dbg!(self.lods[0].metadata().offsets());
         r
     }
 }

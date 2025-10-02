@@ -17,10 +17,8 @@ impl<const N: usize> VoxelData<N> {
     }
 
     pub fn update_staging_buffers_and_prep_copy(&mut self, updates: [Vec<VoxelLODUpdate>; N]) {
-        for (lod, updates) in self.lods.iter_mut().zip(updates.into_iter()) {
-            for update in updates {
-                lod.update_staging_buffers_and_prep_copy(update);
-            }
+        for (lod, lod_updates) in self.lods.iter_mut().zip(updates.into_iter()) {
+            lod.update_staging_buffers_and_prep_copy(&lod_updates);
         }
     }
 }

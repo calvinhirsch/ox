@@ -107,8 +107,6 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
     ) -> Vec<ChunkLoadQueueItem<Self::ChunkLoadQueueItemData>> {
         let mut queue = HashMap::new();
 
-        dbg!(shift);
-
         for item in self.voxel.shift(shift) {
             debug_assert!(queue
                 .insert(
@@ -124,8 +122,6 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
                 .is_none())
         }
 
-        dbg!(&queue);
-
         for item in self.entity.shift(shift) {
             // let e = queue
             //     .get_mut(&item.pos.0)
@@ -139,9 +135,6 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
             });
             e.data.entity = Some(());
         }
-
-        dbg!(&queue);
-        // panic!();
 
         queue.into_values().collect()
     }
@@ -291,44 +284,44 @@ fn generate_chunk(
                 //     } as u8;
 
                 // flat world with mirrors
-                let tlc_size = CHUNK_SIZE.size().pow(2) as i64;
-                let center_tlc = 15;
-                let within_area = x >= tlc_size * (center_tlc - 2)
-                    && x < tlc_size * (center_tlc + 2)
-                    && z >= tlc_size * (center_tlc - 2)
-                    && z < tlc_size * (center_tlc + 2);
-                voxel_ids_out[idx] = if y < tlc_size * center_tlc + 8 && within_area {
-                    Block::GrayCarpet
-                } else {
-                    Block::Air
-                } as u8;
-                if y == tlc_size * center_tlc + 8 && x % 8 == 0 && z % 8 == 0 && within_area {
-                    voxel_ids_out[idx] = Block::RedLight as u8;
-                }
-                if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 4 && within_area {
-                    voxel_ids_out[idx] = Block::GreenLight as u8;
-                }
-                if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 0 && within_area {
-                    voxel_ids_out[idx] = Block::BlueLight as u8;
-                }
-                if y >= tlc_size * center_tlc + 8
-                    && y < tlc_size * center_tlc + 11
-                    && x % 8 == 0
-                    && z % 8 == 4
-                    && within_area
-                {
-                    voxel_ids_out[idx] = Block::Mirror as u8;
-                }
+                // let tlc_size = CHUNK_SIZE.size().pow(2) as i64;
+                // let center_tlc = 8;
+                // let within_area = x >= tlc_size * (center_tlc - 2)
+                //     && x < tlc_size * (center_tlc + 2)
+                //     && z >= tlc_size * (center_tlc - 2)
+                //     && z < tlc_size * (center_tlc + 2);
+                // voxel_ids_out[idx] = if y < tlc_size * center_tlc + 8 && within_area {
+                //     Block::GrayCarpet
+                // } else {
+                //     Block::Air
+                // } as u8;
+                // if y == tlc_size * center_tlc + 8 && x % 8 == 0 && z % 8 == 0 && within_area {
+                //     voxel_ids_out[idx] = Block::RedLight as u8;
+                // }
+                // if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 4 && within_area {
+                //     voxel_ids_out[idx] = Block::GreenLight as u8;
+                // }
+                // if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 0 && within_area {
+                //     voxel_ids_out[idx] = Block::BlueLight as u8;
+                // }
+                // if y >= tlc_size * center_tlc + 8
+                //     && y < tlc_size * center_tlc + 11
+                //     && x % 8 == 0
+                //     && z % 8 == 4
+                //     && within_area
+                // {
+                //     voxel_ids_out[idx] = Block::Mirror as u8;
+                // }
 
                 // hills
-                // let avg_height = 64.0 * 14.0;
-                // let amp = 24.0;
-                // let period = 24.0;
-                // if (y as f64)
-                //     < ((x as f64 / period).sin() + (z as f64 / period).sin()) * amp + avg_height
-                // {
-                //     voxel_ids_out[idx] = Block::Grass as u8;
-                // }
+                let avg_height = 64.0 * 7.0;
+                let amp = 24.0;
+                let period = 24.0;
+                if (y as f64)
+                    < ((x as f64 / period).sin() + (z as f64 / period).sin()) * amp + avg_height
+                {
+                    voxel_ids_out[idx] = Block::Grass as u8;
+                }
             }
         }
     }
