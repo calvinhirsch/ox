@@ -5,7 +5,6 @@ use smallvec::SmallVec;
 use std::cmp::max;
 use std::mem;
 use std::mem::size_of;
-use std::time::Instant;
 use vulkano::buffer::{BufferContents, Subbuffer};
 use vulkano::command_buffer::allocator::CommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, BufferCopy, CopyBufferInfo};
