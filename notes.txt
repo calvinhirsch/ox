@@ -13,3 +13,4 @@ TO-DO rust:
 Plans:
  - Configurable terrain generation function at any LOD
  - Sub-voxels
+ - look into doing chunk generation on the GPU (could generate data on GPU already in the right place then transfer to CPU)

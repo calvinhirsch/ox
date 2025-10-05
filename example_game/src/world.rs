@@ -1,5 +1,5 @@
 use crate::blocks::Block;
-use cgmath::{Array, Point3, Vector3};
+use cgmath::{Array, InnerSpace, Point2, Point3, Vector2, Vector3};
 use hashbrown::HashMap;
 use ox::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
 use ox::ray::ChunkEditorVoxels;
@@ -19,8 +19,8 @@ pub const CHUNK_SIZE: ChunkSize = ChunkSize::new(3);
 
 #[derive(Debug, Clone)]
 pub struct Entity {
-    pub position: Point3<f32>,
-    pub name: String,
+    pub _position: Point3<f32>,
+    pub _name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +243,51 @@ pub fn load_chunk<const N: usize>(
     }
 }
 
+/// www.pcg-random.org and www.shadertoy.com/view/XlGcRh
+fn randi(inp: u32) -> u32 {
+    let x = inp.wrapping_mul(747796405).wrapping_add(2891336453);
+    let x = ((x >> ((x >> 28) + 4)) ^ x).wrapping_mul(277803737);
+    (x >> 22) ^ x
+}
+fn rand(inp: u32) -> f32 {
+    randi(inp) as f32 / u32::MAX as f32
+}
+
+/// returns noise value and its derivatives
+/// https://www.shadertoy.com/view/MdX3Rr
+fn noised(pt: Point2<f64>) -> (f32, Vector2<f32>) {
+    // this will be bad at high integer values
+    let (xf, yf) = (pt.x.fract() as f32, pt.y.fract() as f32);
+    let ux = xf * xf * xf * (xf * (xf * 6.0 - 15.0) + 10.0);
+    let uy = yf * yf * yf * (yf * (yf * 6.0 - 15.0) + 10.0);
+    let dux = 30.0 * xf * xf * (xf * (xf - 2.0) + 1.0);
+    let duy = 30.0 * yf * yf * (yf * (yf - 2.0) + 1.0);
+
+    let tile_x = pt.x.floor() as i64;
+    let tile_y = pt.y.floor() as i64;
+    fn tile_seed(x: i64, y: i64) -> u32 {
+        (100_000_000 + x * 10_000 + y) as u32
+    }
+    let a = rand(tile_seed(tile_x, tile_y));
+    let b = rand(tile_seed(tile_x + 1, tile_y));
+    let c = rand(tile_seed(tile_x, tile_y + 1));
+    let d = rand(tile_seed(tile_x + 1, tile_y + 1));
+
+    let w = a - b - c + d;
+    (
+        a + (b - a) * ux + (c - a) * uy + w * ux * uy,
+        Vector2 {
+            x: dux * ((b - a) + w * uy),
+            y: duy * ((c - a) + w * ux),
+        },
+    )
+}
+
+const N_NOISE_LAYERS: usize = 5;
+const TILE_SIZE: u32 = 250;
+const NOISE_SCALE: f32 = 100.0;
+const BASE_TERRAIN_HEIGHT: f64 = 64.0 * 6.0;
+
 fn generate_chunk(
     chunk_pos: TlcPos<i64>,
     lvl: u8,
@@ -252,21 +297,48 @@ fn generate_chunk(
     largest_chunk_lvl: u8,
 ) {
     let voxel_size = CHUNK_SIZE.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
-    let chunk_start_pt: VoxelPos<i64> = VoxelPos(chunk_pos.0 * (tlc_size / voxel_size) as i64);
-    for x in 0..(tlc_size / voxel_size) as u32 {
-        for y in 0..(tlc_size / voxel_size) as u32 {
-            for z in 0..(tlc_size / voxel_size) as u32 {
+    let chunk_start_pt: VoxelPos<i64> = VoxelPos(chunk_pos.0 * tlc_size as i64);
+    let grid_size = tlc_size / voxel_size;
+
+    for x_grid in 0..grid_size as u32 {
+        for z_grid in 0..grid_size as u32 {
+            // world coords
+            let x = x_grid as i64 * voxel_size as i64 + chunk_start_pt.0.x;
+            let z = z_grid as i64 * voxel_size as i64 + chunk_start_pt.0.z;
+
+            // terrain height
+            let height = {
+                let mut h = 0.0;
+                let mut dh = Vector2::new(0.0, 0.0);
+                for noise_layer in 0..N_NOISE_LAYERS {
+                    let tile_size_divisor = (1usize << noise_layer) as f64;
+                    let tile_coords = Point2 {
+                        x: tile_size_divisor * x as f64 / TILE_SIZE as f64,
+                        y: tile_size_divisor * z as f64 / TILE_SIZE as f64,
+                    };
+
+                    let (v, dv) = noised(tile_coords);
+                    dh += dv;
+                    let noise_scale = 1.0 / (1usize << noise_layer) as f32;
+                    h += (noise_scale * v / (1.0 + dh.dot(dh))) as f64;
+                }
+                h * NOISE_SCALE as f64 + BASE_TERRAIN_HEIGHT
+            };
+
+            for y_grid in 0..grid_size as u32 {
+                // world coord
+                let y = y_grid as i64 * voxel_size as i64 + chunk_start_pt.0.y;
+
                 let idx = VoxelPosInLod {
-                    pos: Point3 { x, y, z },
+                    pos: Point3 {
+                        x: x_grid,
+                        y: y_grid,
+                        z: z_grid,
+                    },
                     lvl,
                     sublvl,
                 }
                 .index(CHUNK_SIZE, largest_chunk_lvl);
-
-                // world coords
-                let x = (x as i64 + chunk_start_pt.0.x) * voxel_size as i64;
-                let y = (y as i64 + chunk_start_pt.0.y) * voxel_size as i64;
-                let z = (z as i64 + chunk_start_pt.0.z) * voxel_size as i64;
 
                 // strips
                 // voxel_ids_out[idx] = if x % 8 == 0 && (y == 64 * 7) {
@@ -284,42 +356,49 @@ fn generate_chunk(
                 //     } as u8;
 
                 // flat world with mirrors
-                // let tlc_size = CHUNK_SIZE.size().pow(2) as i64;
-                // let center_tlc = 8;
-                // let within_area = x >= tlc_size * (center_tlc - 2)
-                //     && x < tlc_size * (center_tlc + 2)
-                //     && z >= tlc_size * (center_tlc - 2)
-                //     && z < tlc_size * (center_tlc + 2);
-                // voxel_ids_out[idx] = if y < tlc_size * center_tlc + 8 && within_area {
-                //     Block::GrayCarpet
-                // } else {
-                //     Block::Air
-                // } as u8;
-                // if y == tlc_size * center_tlc + 8 && x % 8 == 0 && z % 8 == 0 && within_area {
-                //     voxel_ids_out[idx] = Block::RedLight as u8;
-                // }
-                // if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 4 && within_area {
-                //     voxel_ids_out[idx] = Block::GreenLight as u8;
-                // }
-                // if y == tlc_size * center_tlc + 8 && x % 8 == 4 && z % 8 == 0 && within_area {
-                //     voxel_ids_out[idx] = Block::BlueLight as u8;
-                // }
-                // if y >= tlc_size * center_tlc + 8
-                //     && y < tlc_size * center_tlc + 11
-                //     && x % 8 == 0
-                //     && z % 8 == 4
-                //     && within_area
-                // {
-                //     voxel_ids_out[idx] = Block::Mirror as u8;
-                // }
+                let center_tlc = 8;
+                let tlc_size_i = tlc_size as i64;
+                if x >= tlc_size_i * (center_tlc)
+                    && x < tlc_size_i * (center_tlc + 1)
+                    && z >= tlc_size_i * (center_tlc)
+                    && z < tlc_size_i * (center_tlc + 1)
+                {
+                    voxel_ids_out[idx] = if y < tlc_size_i * center_tlc + 8 {
+                        Block::GrayCarpet
+                    } else {
+                        Block::Air
+                    } as u8;
+                    if y == tlc_size_i * center_tlc + 8 && x % 8 == 0 && z % 8 == 0 {
+                        voxel_ids_out[idx] = Block::RedLight as u8;
+                    }
+                    if y == tlc_size_i * center_tlc + 8 && x % 8 == 4 && z % 8 == 4 {
+                        voxel_ids_out[idx] = Block::GreenLight as u8;
+                    }
+                    if y == tlc_size_i * center_tlc + 8 && x % 8 == 4 && z % 8 == 0 {
+                        voxel_ids_out[idx] = Block::BlueLight as u8;
+                    }
+                    if y >= tlc_size_i * center_tlc + 8
+                        && y < tlc_size_i * center_tlc + 11
+                        && x % 8 == 0
+                        && z % 8 == 4
+                    {
+                        voxel_ids_out[idx] = Block::Mirror as u8;
+                    }
+                }
 
                 // hills
-                let avg_height = 64.0 * 7.0;
-                let amp = 24.0;
-                let period = 24.0;
-                if (y as f64)
-                    < ((x as f64 / period).sin() + (z as f64 / period).sin()) * amp + avg_height
-                {
+                // let avg_height = 64.0 * 7.5;
+                // let amp = 24.0;
+                // let period = 24.0;
+                // if (y as f64)
+                //     < ((x as f64 / period).sin() + (z as f64 / period).sin()) * amp + avg_height
+                // {
+                //     voxel_ids_out[idx] = Block::Grass as u8;
+                // }
+
+                // terrain
+
+                if (y as f64) < height {
                     voxel_ids_out[idx] = Block::Grass as u8;
                 }
             }
