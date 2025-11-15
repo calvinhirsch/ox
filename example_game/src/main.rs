@@ -41,7 +41,7 @@ mod blocks;
 use blocks::Block;
 mod world;
 use crate::world::{load_chunk, WorldChunkLoadQueueItemData, WorldMemoryGrid};
-use world::{BorrowedWorldChunkEditor, CHUNK_SIZE};
+use world::{TakenWorldChunkEditor, CHUNK_SIZE};
 
 pub const CAMERA_SPEED: f32 = 10.;
 pub const CAMERA_SENS: f32 = 1.;
@@ -92,13 +92,9 @@ impl DataComponentSet for RendererComponents {
 
 fn main() {
     let event_loop = EventLoop::new();
-
     let (renderer_context, window) = Context::new(&event_loop);
-    window
-        .set_cursor_grab(winit::window::CursorGrabMode::Confined)
-        .unwrap();
-    window.set_cursor_visible(false);
 
+    // The top level chunk (TLC) that defines the bottom corner of our loaded area
     let start_tlc = TlcPos(Point3::<i64> { x: 0, y: 0, z: 0 });
 
     let (voxel_mem_grid, renderer_voxel_data_component) = VoxelMemoryGrid::new(
@@ -131,7 +127,7 @@ fn main() {
                 voxel_resolution: 8,
                 lvl: 1,
                 sublvl: 0,
-                render_area_size: 17,
+                render_area_size: 23,
                 bitmask_binding: 11,
                 voxel_ids_binding: Some(7),
             },
@@ -139,7 +135,7 @@ fn main() {
                 voxel_resolution: 64,
                 lvl: 2,
                 sublvl: 0,
-                render_area_size: 17,
+                render_area_size: 23,
                 bitmask_binding: 12,
                 voxel_ids_binding: None,
             },
@@ -219,8 +215,8 @@ fn main() {
     let mut world = World::new(mem_grid, Camera::new(tlc_size, mem_grid_size), tlc_size, 16);
     let mut loader: ChunkLoader<
         WorldChunkLoadQueueItemData<N_LODS>,
-        BorrowedWorldChunkEditor<N_LODS>,
-    > = ChunkLoader::new(ChunkLoaderParams { n_threads: 2 });
+        TakenWorldChunkEditor<N_LODS>,
+    > = ChunkLoader::new(ChunkLoaderParams { n_threads: 48 });
 
     world.queue_load_all(&mut loader); // load all chunks in render distance
 
@@ -230,6 +226,7 @@ fn main() {
 
     let mut last_render_time = Instant::now();
     let start_time = Instant::now();
+    // variables to track input since last frame
     let mut window_resized = false;
     let mut camera_controller = WinitCameraController::new(CAMERA_SPEED, CAMERA_SENS);
     let mut left_clicked = false;
@@ -237,10 +234,12 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         match event {
+            // Take mouse movement and store in camera controller
             Event::DeviceEvent {
                 event: DeviceEvent::MouseMotion { delta },
                 ..
             } => camera_controller.process_mouse(delta.0, delta.1),
+            // Handle left/right click
             Event::DeviceEvent {
                 event: DeviceEvent::Button { button, state },
                 ..
@@ -263,6 +262,7 @@ fn main() {
                 WindowEvent::Resized(_) => {
                     window_resized = true;
                 }
+                // Handle keyboard input with camera controller
                 WindowEvent::KeyboardInput {
                     input:
                         KeyboardInput {
@@ -277,8 +277,15 @@ fn main() {
                 _ => (),
             },
             Event::MainEventsCleared => {
+                // Start of frame
                 println!("\n========== Frame ==========");
 
+                // Lock cursor in window
+                let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                let _ = window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                window.set_cursor_visible(false);
+
+                // Handle window resizing
                 if window_resized {
                     let dims = window.inner_size();
                     renderer.window_resized(dims);
@@ -292,14 +299,16 @@ fn main() {
                 dbg!(dt);
                 last_render_time = frame_start;
 
-                world.move_camera(&mut camera_controller, dt, &mut loader); // can only be done before or after editing, not during
-                dbg!(Instant::now() - frame_start);
+                // Move camera based on the inputs since last frame as stored in `camera_controller`.
+                // This may queue new chunks to load in `loader`.
+                world.move_camera(&mut camera_controller, dt, &mut loader);
 
+                // Synchronize chunk loader with `world` and start loading queued chunks when possible.
                 loader.sync(&mut world, &load_chunk, voxel_md.clone());
-                dbg!(Instant::now() - frame_start);
 
                 let camera_pos = world.camera().clone();
 
+                // Check if we clicked last frame--if so, delete block or add new block
                 if left_clicked || right_clicked {
                     match cast_ray(
                         &mut world,
@@ -357,17 +366,13 @@ fn main() {
                     }
                 }
 
-                dbg!(Instant::now() - frame_start);
-
                 // Apply updates to staging buffers through the renderer
                 {
                     let render_editor = renderer.start_updating_staging_buffers();
-                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .voxel_data
                         .update_staging_buffers_and_prep_copy(world.mem_grid.voxel.get_updates());
-                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .camera
@@ -378,7 +383,6 @@ fn main() {
                         .buffer_scheme
                         .write_staging()
                         .time = (frame_start.duration_since(start_time).as_micros() / 100) as u32;
-                    dbg!(Instant::now() - frame_start);
                     render_editor
                         .component_set
                         .ubo
@@ -391,10 +395,8 @@ fn main() {
                             world.mem_grid.voxel.start_tlc().0.z as i32,
                         ]);
                 }
-                dbg!(Instant::now() - frame_start);
 
                 renderer.draw_frame();
-                dbg!(Instant::now() - frame_start);
                 loader.print_status();
 
                 left_clicked = false;

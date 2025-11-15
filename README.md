@@ -7,6 +7,10 @@ Requires Rust & Vulkan
 
 To run: `cd example_game` ; `cargo run`
 
+## Getting started
+
+see WALKTHROUGH.md
+
 ## Implementation
 
 Uses custom ray tracing in a compute shader (i.e., does not use hardware ray tracing) (see shaders/raytrace.comp)

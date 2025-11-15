@@ -1,4 +1,4 @@
-use crate::loader::BorrowedChunk;
+use crate::loader::TakenChunk;
 use cgmath::{Array, EuclideanSpace, Point3, Vector3};
 use getset::Getters;
 use mem_grid::{MemGridShift, ShiftGridAxis, ShiftGridAxisVal};
@@ -112,7 +112,7 @@ impl<MG: MemoryGrid> World<MG> {
 impl<QI: Eq, MG: MemoryGrid + MemoryGridLoadChunks<ChunkLoadQueueItemData = QI>> World<MG> {
     pub fn queue_load_all<BC>(&mut self, loader: &mut ChunkLoader<QI, BC>)
     where
-        BC: BorrowedChunk<MemoryGrid = MG>,
+        BC: TakenChunk<MemoryGrid = MG>,
     {
         for chunk in self.mem_grid.queue_load_all() {
             let prio = self.mem_grid.chunk_loading_priority(chunk.pos);
@@ -126,7 +126,7 @@ impl<QI: Eq, MG: MemoryGrid + MemoryGridLoadChunks<ChunkLoadQueueItemData = QI>>
         dt: Duration,
         loader: &mut ChunkLoader<QI, BC>,
     ) where
-        BC: BorrowedChunk<MemoryGrid = MG>,
+        BC: TakenChunk<MemoryGrid = MG>,
     {
         camera_controller.apply(&mut self.camera, dt);
 

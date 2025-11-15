@@ -113,7 +113,7 @@ pub use layer_chunk::LayerChunk;
 /// Chunk data that can be loaded with a `ChunkLoader`. The `ChunkLoader` will first `mark_invalid` when
 /// the chunk is queued, then `take_data_for_loading`, send it to a separate thread, load the data, then
 /// when loading is complete, `mark_valid` and release its pointer.
-pub trait BorrowChunkForLoading<BC, QI> {
+pub trait TakeChunkForLoading<BC, QI> {
     // TODO: derive macro
 
     /// Called when chunk is ready to be loaded to see if the load still needs to happen.
@@ -134,12 +134,12 @@ pub trait BorrowChunkForLoading<BC, QI> {
     ) -> BC;
 }
 
-pub trait BorrowedChunk: Send {
+pub trait TakenChunk: Send {
     type MemoryGrid;
 
     // TODO: derive macro
 
-    /// Return borrowed data to its original place, usually after chunk loading is done.
+    /// Return taken data to its original place, usually after chunk loading is done.
     /// May also include additional steps like, for voxel data, setting up a transfer
     /// region to update the chunk data on the GPU.
     fn return_data(self, grid: &mut Self::MemoryGrid);
@@ -164,7 +164,7 @@ pub struct ChunkLoaderParams {
     pub n_threads: usize,
 }
 
-impl<QI: Eq, BC: BorrowedChunk> ChunkLoader<QI, BC> {
+impl<QI: Eq, BC: TakenChunk> ChunkLoader<QI, BC> {
     pub fn new(params: ChunkLoaderParams) -> Self {
         ChunkLoader {
             active_threads: (0..params.n_threads).map(|_| None).collect(),
@@ -201,24 +201,24 @@ impl<QI: Eq, BC: BorrowedChunk> ChunkLoader<QI, BC> {
     }
 }
 
-impl<QI, BC> ChunkLoader<QI, BC>
+impl<QI, TC> ChunkLoader<QI, TC>
 where
-    BC: BorrowedChunk + 'static, // why 'static? it's borrowed data but the refernces should be raw pointers,
-    BC::MemoryGrid: MemoryGrid + MemoryGridLoadChunks<ChunkLoadQueueItemData = QI>,
+    TC: TakenChunk + 'static,
+    TC::MemoryGrid: MemoryGrid + MemoryGridLoadChunks<ChunkLoadQueueItemData = QI>,
     QI: Clone + Send + Eq + std::fmt::Debug + 'static,
 {
     /// Queues new chunks for loading and puts loaded chunks back in memory grid using editor.
     pub fn sync<F, LP, M>(
         &mut self,
-        world: &mut World<BC::MemoryGrid>,
+        world: &mut World<TC::MemoryGrid>,
         load: &'static F,
         load_params: LP,
     ) where
-        BC::MemoryGrid: EditMemoryGridChunk<M>,
-        for<'a> <BC::MemoryGrid as EditMemoryGridChunk<M>>::ChunkEditor<'a>:
-            BorrowChunkForLoading<BC, QI>,
+        TC::MemoryGrid: EditMemoryGridChunk<M>,
+        for<'a> <TC::MemoryGrid as EditMemoryGridChunk<M>>::ChunkEditor<'a>:
+            TakeChunkForLoading<TC, QI>,
         LP: Clone + Send + 'static,
-        F: Fn(&mut BC, ChunkLoadQueueItem<QI>, LP) + Sync,
+        F: Fn(&mut TC, ChunkLoadQueueItem<QI>, LP) + Sync,
     {
         self.queued_last = 0;
         self.started_loading_last = 0;
@@ -324,12 +324,12 @@ mod tests {
     const MG_SIZE: usize = 32;
     type TestMemoryGrid = MemoryGridLayer<bool, (), ()>;
 
-    struct BorrowedTestChunkEditor {
+    struct TakenTestChunkEditor {
         data: bool,
         chunk_idx: usize,
     }
 
-    impl<'a> BorrowChunkForLoading<BorrowedTestChunkEditor, ()>
+    impl<'a> TakeChunkForLoading<TakenTestChunkEditor, ()>
         for DefaultLayerChunkEditor<'a, bool, (), ()>
     {
         fn should_still_load(&self, _: &()) -> bool {
@@ -340,15 +340,15 @@ mod tests {
             self.chunk.set_invalid()
         }
 
-        fn take_data_for_loading(&mut self, _: &()) -> BorrowedTestChunkEditor {
-            BorrowedTestChunkEditor {
+        fn take_data_for_loading(&mut self, _: &()) -> TakenTestChunkEditor {
+            TakenTestChunkEditor {
                 data: self.chunk.take().unwrap(),
                 chunk_idx: self.chunk_idx,
             }
         }
     }
 
-    impl BorrowedChunk for BorrowedTestChunkEditor {
+    impl TakenChunk for TakenTestChunkEditor {
         type MemoryGrid = TestMemoryGrid;
 
         fn return_data(self, grid: &mut Self::MemoryGrid) {
@@ -396,7 +396,7 @@ mod tests {
             world.metadata().buffer_chunk_states(),
         );
 
-        fn load_f(editor: &mut BorrowedTestChunkEditor, _: ChunkLoadQueueItem<()>, _: ()) {
+        fn load_f(editor: &mut TakenTestChunkEditor, _: ChunkLoadQueueItem<()>, _: ()) {
             assert!(!editor.data);
             editor.data = true;
         }
@@ -462,7 +462,7 @@ mod tests {
         let mut world = World::new(mg, Camera::new(v, MG_SIZE), v, v as u32);
         let mut loader = ChunkLoader::new(ChunkLoaderParams { n_threads: 1 });
 
-        fn load_f(editor: &mut BorrowedTestChunkEditor, _: ChunkLoadQueueItem<()>, _: ()) {
+        fn load_f(editor: &mut TakenTestChunkEditor, _: ChunkLoadQueueItem<()>, _: ()) {
             assert!(!editor.data);
             editor.data = true;
         }

@@ -19,7 +19,7 @@ use ox::{
     world::mem_grid::{
         utils::ChunkSize,
         voxel::grid::{
-            BorrowedChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
+            TakenChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
         },
         MemoryGrid, MemoryGridLoadChunks,
     },
@@ -65,7 +65,7 @@ impl VoxelTypeEnum for Block {
 }
 
 fn fill_chunk<const N: usize, VE: VoxelTypeEnum>(
-    data: &mut BorrowedChunkVoxelEditor<VE, N>,
+    data: &mut TakenChunkVoxelEditor<VE, N>,
     chunk: ChunkLoadQueueItem<VoxelChunkLoadQueueItemData<N>>,
     metadata: VoxelMemoryGridMetadata,
 ) {
@@ -271,7 +271,7 @@ fn test_queue_load_all() {
     // Load chunks
     {
         let mut loader =
-            ChunkLoader::<_, BorrowedChunkVoxelEditor<Block, 5>>::new(ChunkLoaderParams {
+            ChunkLoader::<_, TakenChunkVoxelEditor<Block, 5>>::new(ChunkLoaderParams {
                 n_threads: 1,
             });
         let md = world.mem_grid.metadata().clone();

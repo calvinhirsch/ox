@@ -1,15 +1,14 @@
 use crate::blocks::Block;
 use cgmath::{Array, InnerSpace, Point2, Point3, Vector2, Vector3};
 use hashbrown::HashMap;
-use ox::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem, LayerChunk};
+use ox::loader::{ChunkLoadQueueItem, LayerChunk, TakeChunkForLoading, TakenChunk};
 use ox::ray::ChunkEditorVoxels;
 use ox::world::mem_grid::layer::{
-    DefaultBorrowedLayerChunk, DefaultLayerChunkEditor, MemoryGridLayer,
+    DefaultLayerChunkEditor, DefaultTakenLayerChunk, MemoryGridLayer,
 };
 use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::{
-    BorrowedChunkVoxelEditor, ChunkVoxelEditor, VoxelChunkLoadQueueItemData,
-    VoxelMemoryGridMetadata,
+    ChunkVoxelEditor, TakenChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
 };
 use ox::world::mem_grid::voxel::{ChunkVoxels, VoxelMemoryGrid};
 use ox::world::mem_grid::{EditMemoryGridChunk, MemoryGrid, MemoryGridLoadChunks};
@@ -23,17 +22,17 @@ pub struct Entity {
     pub _name: String,
 }
 
+/// This is what we will store in each chunk to track entities
 #[derive(Debug, Clone)]
 pub struct Entities {
     pub entities: Vec<Entity>,
 }
 
-pub type EntityMemoryGrid = MemoryGridLayer<Entities>;
-
+/// Our custom memory grid
 #[derive(Debug)]
 pub struct WorldMemoryGrid<const N: usize> {
     pub voxel: VoxelMemoryGrid<N>,
-    pub entity: EntityMemoryGrid,
+    pub entity: MemoryGridLayer<Entities>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,13 +45,13 @@ impl<const N: usize> WorldMemoryGrid<N> {
     pub fn new(
         voxel_mem_grid: VoxelMemoryGrid<N>,
         start_tlc: TlcPos<i64>,
-        entity_render_area_size: usize,
+        entity_loaded_area_size: usize,
     ) -> Self {
         let vox_size = voxel_mem_grid.size();
-        let entity_grid_size = entity_render_area_size + 1;
+        let entity_grid_size = entity_loaded_area_size + 1;
         WorldMemoryGrid {
             voxel: voxel_mem_grid,
-            entity: EntityMemoryGrid::new(
+            entity: MemoryGridLayer::<Entities>::new(
                 (0..cubed(entity_grid_size))
                     .map(|_| LayerChunk::new(Entities { entities: vec![] }))
                     .collect(),
@@ -162,9 +161,9 @@ impl<'a, const N: usize> ChunkEditorVoxels<Block, N> for WorldChunkEditor<'a, N>
 }
 
 #[derive(Debug)]
-pub struct BorrowedWorldChunkEditor<const N: usize> {
-    voxel: BorrowedChunkVoxelEditor<Block, N>,
-    entity: Option<DefaultBorrowedLayerChunk<Entities>>,
+pub struct TakenWorldChunkEditor<const N: usize> {
+    voxel: TakenChunkVoxelEditor<Block, N>,
+    entity: Option<DefaultTakenLayerChunk<Entities>>,
 }
 
 impl<const N: usize> EditMemoryGridChunk for WorldMemoryGrid<N> {
@@ -185,7 +184,7 @@ impl<const N: usize> EditMemoryGridChunk for WorldMemoryGrid<N> {
 }
 
 impl<'a, const N: usize>
-    BorrowChunkForLoading<BorrowedWorldChunkEditor<N>, WorldChunkLoadQueueItemData<N>>
+    TakeChunkForLoading<TakenWorldChunkEditor<N>, WorldChunkLoadQueueItemData<N>>
     for WorldChunkEditor<'a, N>
 {
     fn should_still_load(&self, queue_item: &WorldChunkLoadQueueItemData<N>) -> bool {
@@ -208,8 +207,8 @@ impl<'a, const N: usize>
     fn take_data_for_loading(
         &mut self,
         queue_item: &WorldChunkLoadQueueItemData<N>,
-    ) -> BorrowedWorldChunkEditor<N> {
-        BorrowedWorldChunkEditor {
+    ) -> TakenWorldChunkEditor<N> {
+        TakenWorldChunkEditor {
             entity: self.entity.as_mut().map(|e| e.take_data_for_loading(&())),
             voxel: self
                 .voxel
@@ -218,7 +217,7 @@ impl<'a, const N: usize>
     }
 }
 
-impl<const N: usize> BorrowedChunk for BorrowedWorldChunkEditor<N> {
+impl<const N: usize> TakenChunk for TakenWorldChunkEditor<N> {
     type MemoryGrid = WorldMemoryGrid<N>;
 
     fn return_data(self, grid: &mut Self::MemoryGrid) {
@@ -231,13 +230,11 @@ impl<const N: usize> BorrowedChunk for BorrowedWorldChunkEditor<N> {
 }
 
 pub fn load_chunk<const N: usize>(
-    editor: &mut BorrowedWorldChunkEditor<N>,
+    editor: &mut TakenWorldChunkEditor<N>,
     chunk: ChunkLoadQueueItem<WorldChunkLoadQueueItemData<N>>,
     params: VoxelMemoryGridMetadata,
 ) {
-    unsafe {
-        editor.voxel.load_new(chunk.pos, generate_chunk, &params);
-    }
+    editor.voxel.load_new(chunk.pos, generate_chunk, &params);
     if let Some(e) = editor.entity.as_mut() {
         e.chunk.entities.clear();
     }
@@ -283,10 +280,11 @@ fn noised(pt: Point2<f64>) -> (f32, Vector2<f32>) {
     )
 }
 
-const N_NOISE_LAYERS: usize = 5;
-const TILE_SIZE: u32 = 250;
-const NOISE_SCALE: f32 = 100.0;
-const BASE_TERRAIN_HEIGHT: f64 = 64.0 * 6.0;
+const CENTER_TLC: i64 = 11;
+const N_NOISE_LAYERS: usize = 6;
+const TILE_SIZE: u32 = 400;
+const NOISE_SCALE: f32 = 200.0;
+const BASE_TERRAIN_HEIGHT: f64 = 64.0 * (CENTER_TLC as f64 - 3.5);
 
 fn generate_chunk(
     chunk_pos: TlcPos<i64>,
@@ -301,15 +299,18 @@ fn generate_chunk(
     let grid_size = tlc_size / voxel_size;
 
     for x_grid in 0..grid_size as u32 {
+        // world coord
+        let x = x_grid as i64 * voxel_size as i64 + chunk_start_pt.0.x;
+
         for z_grid in 0..grid_size as u32 {
-            // world coords
-            let x = x_grid as i64 * voxel_size as i64 + chunk_start_pt.0.x;
+            // world coord
             let z = z_grid as i64 * voxel_size as i64 + chunk_start_pt.0.z;
 
             // terrain height
-            let height = {
+            let (dh2, height) = {
                 let mut h = 0.0;
                 let mut dh = Vector2::new(0.0, 0.0);
+                let mut dh2 = None;
                 for noise_layer in 0..N_NOISE_LAYERS {
                     let tile_size_divisor = (1usize << noise_layer) as f64;
                     let tile_coords = Point2 {
@@ -321,14 +322,19 @@ fn generate_chunk(
                     dh += dv;
                     let noise_scale = 1.0 / (1usize << noise_layer) as f32;
                     h += (noise_scale * v / (1.0 + dh.dot(dh))) as f64;
+
+                    if noise_layer == 2 {
+                        dh2 = Some(dh);
+                    }
                 }
-                h * NOISE_SCALE as f64 + BASE_TERRAIN_HEIGHT
+                (dh2.unwrap(), h * NOISE_SCALE as f64 + BASE_TERRAIN_HEIGHT)
             };
 
             for y_grid in 0..grid_size as u32 {
                 // world coord
                 let y = y_grid as i64 * voxel_size as i64 + chunk_start_pt.0.y;
 
+                // index in voxel_ids_out
                 let idx = VoxelPosInLod {
                     pos: Point3 {
                         x: x_grid,
@@ -356,29 +362,28 @@ fn generate_chunk(
                 //     } as u8;
 
                 // flat world with mirrors
-                let center_tlc = 8;
                 let tlc_size_i = tlc_size as i64;
-                if x >= tlc_size_i * (center_tlc)
-                    && x < tlc_size_i * (center_tlc + 1)
-                    && z >= tlc_size_i * (center_tlc)
-                    && z < tlc_size_i * (center_tlc + 1)
+                if x >= tlc_size_i * (CENTER_TLC)
+                    && x < tlc_size_i * (CENTER_TLC + 1)
+                    && z >= tlc_size_i * (CENTER_TLC)
+                    && z < tlc_size_i * (CENTER_TLC + 1)
                 {
-                    voxel_ids_out[idx] = if y < tlc_size_i * center_tlc + 8 {
+                    voxel_ids_out[idx] = if y < tlc_size_i * CENTER_TLC + 8 {
                         Block::GrayCarpet
                     } else {
                         Block::Air
                     } as u8;
-                    if y == tlc_size_i * center_tlc + 8 && x % 8 == 0 && z % 8 == 0 {
+                    if y == tlc_size_i * CENTER_TLC + 8 && x % 8 == 0 && z % 8 == 0 {
                         voxel_ids_out[idx] = Block::RedLight as u8;
                     }
-                    if y == tlc_size_i * center_tlc + 8 && x % 8 == 4 && z % 8 == 4 {
+                    if y == tlc_size_i * CENTER_TLC + 8 && x % 8 == 4 && z % 8 == 4 {
                         voxel_ids_out[idx] = Block::GreenLight as u8;
                     }
-                    if y == tlc_size_i * center_tlc + 8 && x % 8 == 4 && z % 8 == 0 {
+                    if y == tlc_size_i * CENTER_TLC + 8 && x % 8 == 4 && z % 8 == 0 {
                         voxel_ids_out[idx] = Block::BlueLight as u8;
                     }
-                    if y >= tlc_size_i * center_tlc + 8
-                        && y < tlc_size_i * center_tlc + 11
+                    if y >= tlc_size_i * CENTER_TLC + 8
+                        && y < tlc_size_i * CENTER_TLC + 11
                         && x % 8 == 0
                         && z % 8 == 4
                     {
@@ -397,9 +402,16 @@ fn generate_chunk(
                 // }
 
                 // terrain
-
                 if (y as f64) < height {
-                    voxel_ids_out[idx] = Block::Grass as u8;
+                    voxel_ids_out[idx] = if (y as f64) < height - 5.0 {
+                        Block::Rock as u8
+                    } else if dh2.dot(dh2) > 0.8 {
+                        Block::Rock as u8
+                    } else if height > 64.0 * (CENTER_TLC as f64 - 2.0) {
+                        Block::Snow as u8
+                    } else {
+                        Block::Grass as u8
+                    }
                 }
             }
         }

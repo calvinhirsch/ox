@@ -13,9 +13,9 @@
 #define N_CHUNK_LVLS 2  // 2 means there are two chunk sizes (CHUNK_SIZE and CHUNK_SIZE**2) where the largest chunk size is the world height
 
 #define N_BOUNCES 3
-#define N_CASTS 1
+#define N_CASTS 2
 
-#define RENDER_N_TLCS 17
+#define RENDER_N_TLCS 23
 #define N_MATERIAL_ID_BITS 8
 #define N_MATERIALS 3
 

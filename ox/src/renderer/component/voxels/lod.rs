@@ -59,6 +59,10 @@ impl RendererVoxelLOD {
     }
 
     pub fn update_staging_buffers_and_prep_copy(&mut self, updates: &Vec<VoxelLODUpdate>) {
+        if updates.len() == 0 {
+            return;
+        }
+
         self.bitmask_buffers
             .buffer_scheme
             .update_staging_buffer_and_prep_copy(

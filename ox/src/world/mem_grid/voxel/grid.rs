@@ -1,7 +1,7 @@
 use super::lod::{
-    BorrowedLodChunk, LodChunkEditorMaybeUnloaded, VoxelLODCreateParams, VoxelMemoryGridLod,
+    LodChunkEditorMaybeUnloaded, TakenLodChunk, VoxelLODCreateParams, VoxelMemoryGridLod,
 };
-use crate::loader::{BorrowChunkForLoading, BorrowedChunk, ChunkLoadQueueItem};
+use crate::loader::{ChunkLoadQueueItem, TakeChunkForLoading, TakenChunk};
 use crate::renderer::component::voxels::lod::VoxelLODUpdate;
 use crate::renderer::component::voxels::VoxelData;
 use crate::voxel_type::VoxelTypeEnum;
@@ -233,7 +233,7 @@ impl<VE: VoxelTypeEnum, const N: usize> EditMemoryGridChunk<VE> for VoxelMemoryG
 }
 
 impl<'a, const N: usize, VE: VoxelTypeEnum>
-    BorrowChunkForLoading<BorrowedChunkVoxelEditor<VE, N>, VoxelChunkLoadQueueItemData<N>>
+    TakeChunkForLoading<TakenChunkVoxelEditor<VE, N>, VoxelChunkLoadQueueItemData<N>>
     for ChunkVoxelEditor<'a, VE, N>
 {
     fn should_still_load(&self, queue_item: &VoxelChunkLoadQueueItemData<N>) -> bool {
@@ -253,7 +253,7 @@ impl<'a, const N: usize, VE: VoxelTypeEnum>
     fn take_data_for_loading(
         &mut self,
         queue_item: &VoxelChunkLoadQueueItemData<N>,
-    ) -> BorrowedChunkVoxelEditor<VE, N> {
+    ) -> TakenChunkVoxelEditor<VE, N> {
         for (i, (queued_lod, lod)) in queue_item.lods.iter().zip(self.lods.iter_mut()).enumerate() {
             match *queued_lod {
                 true => {
@@ -264,12 +264,12 @@ impl<'a, const N: usize, VE: VoxelTypeEnum>
                         queue_item
                     );
                 }
-                // If we aren't loading a LOD, mark that LOD as none in this borrowed
+                // If we aren't loading a LOD, mark that LOD as none in this taken
                 // chunk data so that we only load the correct ones.
                 false => *lod = None,
             }
         }
-        BorrowedChunkVoxelEditor::new(self).unwrap()
+        TakenChunkVoxelEditor::new(self).unwrap()
     }
 
     fn mark_invalid(&mut self) -> Result<(), ()> {
@@ -344,12 +344,12 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
 }
 
 #[derive(Getters, Debug)]
-pub struct BorrowedChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
+pub struct TakenChunkVoxelEditor<VE: VoxelTypeEnum, const N: usize> {
     #[get = "pub"]
-    lods: [Option<BorrowedLodChunk<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
+    lods: [Option<TakenLodChunk<VE>>; N], // When this chunk is too far away for an LOD to have data, it is `None` here
 }
 
-impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunk for BorrowedChunkVoxelEditor<VE, N> {
+impl<VE: VoxelTypeEnum, const N: usize> TakenChunk for TakenChunkVoxelEditor<VE, N> {
     type MemoryGrid = VoxelMemoryGrid<N>;
 
     fn return_data(self, grid: &mut VoxelMemoryGrid<N>) {
@@ -362,11 +362,11 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunk for BorrowedChunkVoxelEdit
     }
 }
 
-impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
+impl<VE: VoxelTypeEnum, const N: usize> TakenChunkVoxelEditor<VE, N> {
     pub fn new(ce: &mut ChunkVoxelEditor<VE, N>) -> Result<Self, ()> {
         let lods = ce.lods.each_mut().map(|lod_o| match lod_o.as_mut() {
             None => Ok(None),
-            Some(lod) => BorrowedLodChunk::new(lod).map_or(Err(()), |e| Ok(Some(e))),
+            Some(lod) => TakenLodChunk::new(lod).map_or(Err(()), |e| Ok(Some(e))),
         });
         if lods.iter().any(|l| l.is_err()) {
             Err(())
@@ -378,11 +378,9 @@ impl<VE: VoxelTypeEnum, const N: usize> BorrowedChunkVoxelEditor<VE, N> {
     }
 
     /// Load a chunk using `gen_func` to generate the voxel data where needed.
-    /// Unsafe because it will access the chunk's data when it is in "missing" state.
-    /// Presumably, this function is being called in a chunk loading thread having borrowed
-    /// the chunk data. This will load all non-`None` LODs in `self`, so if a LOD exists
+    /// This will load all non-`None` LODs in `self`, so if a LOD exists
     /// but shouldn't be loaded, the reference to that LOD should be set to `None` in `self`.
-    pub unsafe fn load_new<F: Fn(TlcPos<i64>, u8, u8, &mut ChunkVoxels, usize, u8)>(
+    pub fn load_new<F: Fn(TlcPos<i64>, u8, u8, &mut ChunkVoxels, usize, u8)>(
         &mut self,
         pos: TlcPos<i64>,
         gen_func: F,

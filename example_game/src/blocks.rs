@@ -3,17 +3,21 @@ use num_derive::{FromPrimitive, ToPrimitive};
 
 use ox::voxel_type::{Material, VoxelTypeDefinition, VoxelTypeEnum};
 
+/// The additional attributes (other than render material) to store about each voxel type
 pub struct BlockTypeAttrs {
     #[allow(dead_code)]
     dollars: u32,
 }
 
+/// Defining our possible voxel types
 #[derive(Debug, Sequence, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq, Hash)]
 pub enum Block {
     Air,
     Debug,
     Grass,
     Dirt,
+    Rock,
+    Snow,
     Mirror,
     RedLight,
     GreenLight,
@@ -45,7 +49,7 @@ impl VoxelTypeEnum for Block {
             },
             Grass => VoxelTypeDefinition {
                 material: Material {
-                    color: [0.0745, 0.42747, 0.08235],
+                    color: [0.38, 0.45, 0.25],
                     ..Default::default()
                 },
                 is_visible: true,
@@ -54,6 +58,22 @@ impl VoxelTypeEnum for Block {
             Dirt => VoxelTypeDefinition {
                 material: Material {
                     color: [0.44, 0.32, 0.25],
+                    ..Default::default()
+                },
+                is_visible: true,
+                attributes: BlockTypeAttrs { dollars: 3 },
+            },
+            Rock => VoxelTypeDefinition {
+                material: Material {
+                    color: [0.53, 0.5, 0.42],
+                    ..Default::default()
+                },
+                is_visible: true,
+                attributes: BlockTypeAttrs { dollars: 3 },
+            },
+            Snow => VoxelTypeDefinition {
+                material: Material {
+                    color: [0.95, 0.95, 0.95],
                     ..Default::default()
                 },
                 is_visible: true,

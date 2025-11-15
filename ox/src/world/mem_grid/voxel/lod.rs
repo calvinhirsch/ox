@@ -888,7 +888,7 @@ fn apply_to_voxel_indices_in_lower_lod_for_lvl<F: FnMut(usize)>(
 }
 
 #[derive(Debug, Getters, MutGetters, CopyGetters)]
-pub struct BorrowedLodChunk<VE: VoxelTypeEnum> {
+pub struct TakenLodChunk<VE: VoxelTypeEnum> {
     voxel_type_enum: PhantomData<VE>,
     #[getset(get_mut = "pub", get = "pub")]
     data: LodChunkData,
@@ -900,7 +900,7 @@ pub struct BorrowedLodChunk<VE: VoxelTypeEnum> {
     sublvl: u8,
 }
 
-impl<VE: VoxelTypeEnum> BorrowedLodChunk<VE> {
+impl<VE: VoxelTypeEnum> TakenLodChunk<VE> {
     pub fn new(
         LodChunkEditorMaybeUnloaded {
             voxel_type_enum: _,
@@ -920,7 +920,7 @@ impl<VE: VoxelTypeEnum> BorrowedLodChunk<VE> {
     }
 }
 
-impl<VE: VoxelTypeEnum> BorrowedLodChunk<VE> {
+impl<VE: VoxelTypeEnum> TakenLodChunk<VE> {
     pub fn return_data(self, lod: &mut VoxelMemoryGridLod) {
         lod.chunks_mut()[self.chunk_idx] = LayerChunk::new_valid(self.data);
     }
