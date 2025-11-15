@@ -1,8 +1,9 @@
 # Walkthrough
 
-This will go through code very similar to that in `example_game/` and explain the concepts along the way.
 
-We need to define a few main things:
+This will explain most of ox's high level ideas by going through some of the code in `example_game/` and explaining the concepts along the way.
+
+In order to use ox, we need to define a few main things:
 1. A `VoxelTypeEnum` to define our voxel types.
 2. A `World` to store our world data
 3. A function to generate/load chunk data
@@ -182,6 +183,7 @@ Levels of detail are generally referred to by their chunk level and sublevel.
 Chunk level 0 sublevel 0 is individual 1x1x1 voxels.
 
 | lvl | sublvl | voxel size |
+|---|---|---|
 | 0 | 0 | 1 |
 | 0 | 1 | 2 |
 | 0 | 2 | 4 |
@@ -227,7 +229,7 @@ We won't go over these, but you can look in `example_game/src/world.rs` to see t
 
 ### Allowing editing
 
-In order to allow editing of the world memory grid data, we need to provide an editor and a way to construct it.
+In order to allow editing of the world memory grid data, we need to provide an editor and a way to construct that editor.
 
 ```rust
 #[derive(Debug)]
@@ -790,3 +792,9 @@ It is commented such that you can follow the code based on the background in thi
 The game loop in `example_game` also includes code allowing the player to left click to remove the block
 they're looking at or right click to place a block.
 This uses `ox::ray::cast_ray`.
+
+
+
+# Ray tracing shader
+
+TODO
