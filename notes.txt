@@ -2,6 +2,7 @@ For debugging: use qrenderdoc
 For profiling GPU: use Nsight graphics (ngfx-ui), usually have to launch as root to use GPU trace profiler
 
 TO-DO rust:
+ - Fatser implementation of VoxelTypeEnum::def?
  - Look into whether chunk loading would break if you skip the buffer chunk loading zone at the edge of chunk
  - Macros for deriving stuff
     - datacomponent in renderer
