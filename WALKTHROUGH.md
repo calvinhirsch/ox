@@ -795,6 +795,71 @@ This uses `ox::ray::cast_ray`.
 
 
 
-# Ray tracing shader
+# Ray tracing
 
-TODO
+### What is path tracing?
+
+Path tracing aims to directly simulate the real physics of light.
+
+Light, in the real world, eminates from light sources and bounces off of surfaces.
+Surfaces absorb some wavelengths of the light and reflect others, essentially changing the color
+of the ray after the bounce.
+When light enters our eyes, we sense its color and intensity.
+This process allows us to see the color of objects as well as other visual characteristics based on
+how the light bounces off of them, such as reflectivity.
+
+We can simulate this by casting light rays around a scene.
+Each ray will carry a color and intensity that is modified as it bounces.
+Bounces are stochastic, so many rays must be cast to create a realistic simulation.
+
+Unfortunately, simulating this whole process sufficiently is far too slow for real time rendering.
+One thing we can do to make it more feasible is only simulate rays that actually end up
+entering the eye/camera, since we never would see the result of the others anyway.
+We do this by tracing the ray paths backwards, shooting them out from the eye and calculating their
+bounces in reverse.
+During the rendering process, rays are cast out from the camera in a grid.
+Each one returns a color and becomes one pixel in the final rendered image.
+
+### Ox's "raw" path tracing
+
+Ox does "raw" or "naive" path tracing.
+It does not currently do any postprocessing of the results or reuse the results across frames,
+and it also does not intelligently sample bounce directions, they are completely random.
+Basically all real time rendering techniques that use path tracing have significant postprocessing,
+because the compute required to make raw path tracing give smooth output is exorbitant.
+Similarly, many implementations intelligently sample ray bounce directions, such as those that will lead to
+light sources.
+Ox doesn't do this either.
+Both of these are future directions to improve visual fidelity.
+For now, the rendered output is somewhat noisy.
+
+### Voxel meshing
+
+The key difference between Ox and many other voxel rendering engines is that the voxels are **not** meshed.
+
+Voxel data is naturally and most easily stored as a big array of IDs that represents, for each voxel slot in
+3D space, which type of voxel (if any) is present there.
+This is how Ox represents the voxel data both on the CPU and GPU.
+
+This is in contrast to many rendering approaches for voxels, which take the raw voxel data and convert it to meshes.
+Since 3D models are usually represnted as meshes, this can then be rendered like a "normal" 3D scene.
+For example, this could be rasterized or ray traced using specialized hardware like NVIDIA RT cores.
+
+Ox instead uses a custom algorithm to perform path tracing on the raw voxel data.
+This approach, compared to meshing, has a number of tradeoffs:
+
+Pros
+ + Much less work to do on the CPU overall (no meshing)
+ + Sparse updates are much faster
+ + Simplicity
+
+Cons
+ - Data representation is much less compact in most cases
+    - Much more VRAM usage
+    - More time to transfer data CPU -> GPU
+ - Can strictly only render voxels, nothing else. When meshing, you can also render other arbitrary meshes.
+
+The path tracing is implemented in a compute shader.
+This means that it does not use specialized hardware for ray tracing, such as NVIDIA's RT cores.
+This the case because hardware ray tracing generally only works with a standard bounding volume hierarchy,
+which is ... TODO
