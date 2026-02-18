@@ -838,11 +838,11 @@ For now, the rendered output is somewhat noisy.
 The key difference between Ox and many other voxel rendering engines is that the voxels are **not** meshed.
 
 Voxel data is naturally and most easily stored as a big array of IDs that represents, for each voxel slot in
-3D space, which type of voxel (if any) is present there.
+the 3D grid, which type of voxel (if any) is present there.
 This is how Ox represents the voxel data both on the CPU and GPU.
 
 This is in contrast to many rendering approaches for voxels, which take the raw voxel data and convert it to meshes.
-Since 3D models are usually represnted as meshes, this can then be rendered like a "normal" 3D scene.
+Since 3D models are usually represented as meshes, this can then be rendered like a "normal" 3D scene.
 For example, this could be rasterized or ray traced using specialized hardware like NVIDIA RT cores.
 
 Ox instead uses a custom algorithm to perform path tracing on the raw voxel data.
@@ -854,12 +854,35 @@ Pros
  + Simplicity
 
 Cons
- - Data representation is much less compact in most cases
+ - Data representation on GPU is much less compact in most cases
     - Much more VRAM usage
     - More time to transfer data CPU -> GPU
- - Can strictly only render voxels, nothing else. When meshing, you can also render other arbitrary meshes.
+ - Can strictly only render voxels, nothing else. With meshing, you can also render other arbitrary meshes.
 
 The path tracing is implemented in a compute shader.
 This means that it does not use specialized hardware for ray tracing, such as NVIDIA's RT cores.
 This the case because hardware ray tracing generally only works with a standard bounding volume hierarchy,
-which is ... TODO
+which is a hierarchy of larger and larger bounding boxes that encapsulate the contents of the scene.
+Ox's approach has the voxel data nicely organized into fixed-size chunks, which means that we don't need
+such a data structure. It instead uses bitmasks for the chunks at each chunk level.
+
+### Path tracing algorithm
+
+We begin tracing at the camera position at chunk level 0 (traversing individual 1x1x1 voxels).
+We use the level 0 bitmask to see if any of the voxels we intersect are filled.
+If one is, we would look at the level 0 voxel ID array to see what kind it is.
+If we don't hit any voxels in this chunk, we exit the chunk and go up a voxel level to level 1 (8x8x8 voxels, if chunk size is 8).
+Now, we traverse at level 1, using the level 1 bitmask.
+This bitmask is positive if any voxels in the 8x8x8 level 1 chunk are present.
+If we hit a positive value, we zoom back in to level 0 and traverse through this chunk's individual voxels.
+
+This process allows going out to further chunk levels (e.g., level 2 or 64x64x64 chunks).
+It also supports different LODs, where the voxels in chunk level 0 are larger than 1x1x1.
+This is designated at the top level chunk (TLC) level, where a TLC must have the same LOD throughout.
+
+#### Performance
+
+This algorithm is designed such that not only can different threads trace different rays in lockstep,
+but they can do so with rays that are traversing at different chunk levels.
+That is, one thread could be tracing a ray at chunk level 0 while another is tracing one at chunk level 2
+within the same warp/wavefront.

@@ -1,9 +1,14 @@
 # Ox
 A real-time ray tracing voxel rendering engine.
 
+## Demo
+
+<video src="https://drive.google.com/file/d/1jb0Y3LH1U-WSUu6rl-gE0EYSc38RGnY0/view" />
+
 ## Setup
 
-Requires Rust & Vulkan
+Rust: [https://rustup.rs/](https://rustup.rs/)
+Vulkan: [https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting](https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting)
 
 To run: `cd example_game` ; `cargo run`
 
@@ -23,6 +28,8 @@ Voxels are stored densely on the GPU (no sparse data structures, no meshing) in 
  2. A list of IDs (which are u8s) representing which voxel type is present in each spot
 
 There is a level of detail (LOD) system where unit voxels in further away chunks are combined together and rendered as larger voxels.
+
+A chunk loading system runs in parallel with main thread execution and allows you to define your own generation and persisting of chunks.
 
 ## Limitations
  - Relies on storing all voxel data densely in GPU memory (no meshing, sparse data structures, etc.)
