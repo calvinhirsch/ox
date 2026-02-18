@@ -268,9 +268,9 @@ void set_block_at_lvls(vec3 ray_origin_xyz, int at_lvl_and_below) {
     }
 }
 
-void step_block(uint ax, float ax_dir, uint lvl) {
+void step_block(uint ax, float ax_dir, uint lvl, vec3 ray_origin_xyz) {
     // Step the block in ax_dir direction along ax at lvl
-    // ax is xyz (not abc)
+    // ax is in xyz (not abc)
 
     // ENHANCEMENT: make general (sublvls)
 
@@ -283,17 +283,33 @@ void step_block(uint ax, float ax_dir, uint lvl) {
         lvl0_edge_val = 0;
     }
     else {
-        incr = -1; // if block is 0, this will cause it to loop to uint max which is fine, >= CHUNK_SIZE checks this  TODO: Verify this
+        incr = -1; // if block is 0, this will cause it to loop to uint max which is fine, >= CHUNK_SIZE checks this
         edge_val = CHUNK_SIZE - 1;
         lvl0_edge_val = (CHUNK_SIZE >> tlc_sublvl) - 1;
     }
+    uint og_sublvl = tlc_sublvl;
 
     block[lvl][ax] += incr;
     // here, the ">= CHUNK_SIZE" actually also checks if < 0 because block is uint
     for (uint lvli = lvl; lvli < N_CHUNK_LVLS && (block[lvli][ax] >= (lvli == 0 ? CHUNK_SIZE >> tlc_sublvl : CHUNK_SIZE)); lvli++) {
         block[lvli + 1][ax] += incr;
         if (lvli + 1 == N_CHUNK_LVLS) {
+            // we just updated the top level chunk
+
+            // update global state for current top level chunk
             set_tlc_attrs_based_on_block();
+
+            // check if we have changed tlc_sublvl
+            // if so, we need to adjust the level 0 block position for the new sublvl
+            if (tlc_sublvl != og_sublvl) {
+                // block[0][ax] must have crossed a threshold, so don't need to update it here
+                // but we will anyway because it's easier.
+                // we do need to set the other two block[0] axes based on ray position
+                set_block_at_lvls(ray_origin_xyz, 0);
+                if (ax_dir < 0) {
+                    lvl0_edge_val = (CHUNK_SIZE >> tlc_sublvl) - 1;
+                }
+            }
         }
         block[lvli][ax] = lvli == 0 ? lvl0_edge_val : edge_val;
     }
@@ -748,7 +764,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
                     // ray_origin will be on a block border, so make sure 'block' contains the correct block that is on
                     // the correct side of crossed_ax
                     if ((ray_dir[crossed_ax] > 0 && block[lvl][crossed_ax] == (CHUNK_SIZE >> sublvl) - 1) || (ray_dir[crossed_ax] < 0 && block[lvl][crossed_ax] == 0)) {
-                        step_block(crossed_ax, ray_dir[crossed_ax], lvl);
+                        step_block(crossed_ax, ray_dir[crossed_ax], lvl, ray_origin);
                     }
 
                     if (block[2][0] < 0 || block[2][0] >= RENDER_N_TLCS || block[2][1] < 0 || block[2][1] >= RENDER_N_TLCS || block[2][2] < 0 || block[2][2] >= RENDER_N_TLCS) {
@@ -778,7 +794,7 @@ vec3 trace_ray(vec3 ray_origin, vec3 ray_dir, inout uint rand_state) {
 
             // Currently, 'block' is indicating the voxel we just bounced off of. Step it towards the direction
             // we are reflecting to. This must be in XYZ axes.
-            step_block(crossed_ax, ray_dir[crossed_ax], tlc_min_lvl);
+            step_block(crossed_ax, ray_dir[crossed_ax], tlc_min_lvl, ray_origin);
 
             if (
                 block[N_CHUNK_LVLS][0] < 0 || block[N_CHUNK_LVLS][0] >= RENDER_N_TLCS ||
