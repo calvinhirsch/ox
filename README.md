@@ -3,7 +3,7 @@ A real-time ray tracing voxel rendering engine.
 
 ## Demo
 
-<video src="https://drive.google.com/file/d/1jb0Y3LH1U-WSUu6rl-gE0EYSc38RGnY0/view" />
+https://drive.google.com/file/d/1jb0Y3LH1U-WSUu6rl-gE0EYSc38RGnY0/preview
 
 ## Setup
 
