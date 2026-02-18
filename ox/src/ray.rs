@@ -62,7 +62,7 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
     RayPos {
         tlc,
         pos,
-        mut ipos,
+        ipos,
         last_crossed_ax,
     }: RayPos,
     ray_dir: Vector3<f32>,
@@ -121,6 +121,11 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
         x: pos[ax_a],
         y: pos[ax_b],
         z: pos[ax_c],
+    };
+    let mut ipos = Point3 {
+        x: ipos[ax_a],
+        y: ipos[ax_b],
+        z: ipos[ax_c],
     };
 
     // Bounds of traversal
@@ -194,9 +199,7 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
         // Snap ray origin to appropriate A axis value along ray direction.
         // As noted above, this is because it may not have started at a round A value.
         pos.add_assign(
-            ray_dir
-                * (ipos.x as f32 - pos.x + (ray_dir.x < 0.0) as i32 as f32)
-                * (1.0 / (ray_dir.x + f32::EPSILON)),
+            ray_dir * (ipos.x as f32 - pos.x + (ray_dir.x < 0.0) as i32 as f32) / ray_dir.x,
         );
         // set B and C axis values to match ray origin
         ipos.y = pos.y.floor() as i32;
@@ -204,8 +207,8 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
 
         let b_crossed = ipos.y != last_bi;
         let c_crossed = ipos.z != last_ci;
-        let b_ib = ipos.y > min_pt.y && ipos.y < max_pt.y; // is b still in bounds
-        let c_ib = ipos.z > min_pt.z && ipos.z < max_pt.z; // is c still in bounds
+        let b_ib = ipos.y >= min_pt.y && ipos.y <= max_pt.y; // is b still in bounds
+        let c_ib = ipos.z >= min_pt.z && ipos.z <= max_pt.z; // is c still in bounds
 
         // SECOND CHECK: in the case where we cross all three axes, the second voxel
         // intersected is determined by which axis we cross first.
@@ -256,12 +259,8 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
             ipos.x -= a_dir;
             if ray_dir[ax_abc] > 0.0 {
                 new_tlc.0[ax_xyz] += 1;
-                // pos[ax_abc] = 0.0;
-                // ipos[ax_abc] = 0;
             } else {
                 new_tlc.0[ax_xyz] -= 1;
-                // pos[ax_abc] = tlc_size as f32;
-                // ipos[ax_abc] = tlc_size - 1;
             }
 
             // Our position is going to be at the next round value in A axis, but
@@ -269,6 +268,7 @@ pub fn cast_ray_in_tlc<VE: VoxelTypeEnum, const N: usize>(
             let target_pos = if ray_dir[ax_abc] > 0.0 { tlc_size } else { 0 };
             let delta = (target_pos as f32 - pos[ax_abc]) / (ray_dir[ax_abc] + f32::EPSILON);
             pos += ray_dir * delta;
+            debug_assert!((target_pos as f32 - pos[ax_abc]).abs() < 1e-6);
             pos[ax_abc] = target_pos as f32;
             ipos = pos.map(|a| a.floor() as i32);
             ipos[ax_abc] = target_pos;

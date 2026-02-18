@@ -278,7 +278,7 @@ fn main() {
             },
             Event::MainEventsCleared => {
                 // Start of frame
-                println!("\n========== Frame ==========");
+                // println!("\n========== Frame ==========");
 
                 // Lock cursor in window
                 let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
@@ -296,7 +296,7 @@ fn main() {
 
                 let frame_start = Instant::now();
                 let dt = frame_start - last_render_time;
-                dbg!(dt);
+                // dbg!(dt);
                 last_render_time = frame_start;
 
                 // Move camera based on the inputs since last frame as stored in `camera_controller`.
@@ -397,7 +397,7 @@ fn main() {
                 }
 
                 renderer.draw_frame();
-                loader.print_status();
+                // loader.print_status();
 
                 left_clicked = false;
                 right_clicked = false;

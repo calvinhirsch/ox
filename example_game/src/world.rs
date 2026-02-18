@@ -107,18 +107,17 @@ impl<const N: usize> MemoryGridLoadChunks for WorldMemoryGrid<N> {
         let mut queue = HashMap::new();
 
         for item in self.voxel.shift(shift) {
-            debug_assert!(queue
-                .insert(
-                    item.pos.0,
-                    ChunkLoadQueueItem {
-                        pos: item.pos,
-                        data: WorldChunkLoadQueueItemData {
-                            voxel: Some(item.data),
-                            entity: None,
-                        }
-                    }
-                )
-                .is_none())
+            let r = queue.insert(
+                item.pos.0,
+                ChunkLoadQueueItem {
+                    pos: item.pos,
+                    data: WorldChunkLoadQueueItemData {
+                        voxel: Some(item.data),
+                        entity: None,
+                    },
+                },
+            );
+            debug_assert!(r.is_none())
         }
 
         for item in self.entity.shift(shift) {

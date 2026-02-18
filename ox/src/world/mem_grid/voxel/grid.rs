@@ -273,12 +273,12 @@ impl<'a, const N: usize, VE: VoxelTypeEnum>
     }
 
     fn mark_invalid(&mut self) -> Result<(), ()> {
-        unsafe { self.mark_all_lods_invalid() }
+        self.mark_all_lods_invalid()
     }
 }
 
 impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
-    pub unsafe fn mark_all_lods_invalid(&mut self) -> Result<(), ()> {
+    pub fn mark_all_lods_invalid(&mut self) -> Result<(), ()> {
         let mut r = Ok(());
         for lod_o in self.lods.iter_mut() {
             if let Some(lod) = lod_o {
