@@ -3,12 +3,12 @@ A real-time ray tracing voxel rendering engine.
 
 ## Demo
 
-<video src="https://drive.google.com/file/d/1jb0Y3LH1U-WSUu6rl-gE0EYSc38RGnY0/preview" width="640" height="480"></video>
+![](https://drive.google.com/file/d/1jb0Y3LH1U-WSUu6rl-gE0EYSc38RGnY0/preview")
 
 ## Setup
 
-Rust: [https://rustup.rs/](https://rustup.rs/)
-Vulkan: [https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting](https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting)
+Rust: [](https://rustup.rs/)
+Vulkan: [](https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting)
 
 To run: `cd example_game` ; `cargo run`
 
