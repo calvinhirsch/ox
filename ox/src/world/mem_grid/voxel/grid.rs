@@ -84,7 +84,7 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         for p in lod_params.iter() {
             p.validate(chunk_size);
         }
-        debug_assert!(
+        assert!(
             lod_params.len()
                 == lod_params
                     .iter()
@@ -102,6 +102,13 @@ impl<const N: usize> VoxelMemoryGrid<N> {
         assert!(
             largest_sublvl == 0,
             "Largest lvl LOD (lowest fidelity) should have sublvl 0"
+        );
+
+        assert!(
+            (0..(lod_params.len() - 1)).all(|i| lod_params[i].lvl < lod_params[i + 1].lvl
+                || (lod_params[i].lvl == lod_params[i + 1].lvl
+                    && lod_params[i].sublvl < lod_params[i + 1].sublvl)),
+            "LODs must have increasing lvl/sublvl",
         );
 
         let (grid_lods, lods) = unzip_array_of_tuple(lod_params.map(|params| {

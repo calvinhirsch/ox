@@ -132,8 +132,14 @@ layout(set = 0, binding = 12, scalar) readonly buffer VoxelBitmask20 {
 
 layout(local_size_x = LOCAL_SIZE, local_size_y = LOCAL_SIZE, local_size_z = 1) in;
 
+// Arithmetic mod. This implementation is weird because modulo of a negative number is undefined in GLSL
 uvec3 amod(ivec3 v, uint m) {
-    return uvec3(((v % int(m)) + int(m)) % m);
+    uvec3 vm = uvec3(abs(v)) % m;
+    return uvec3(
+        v.x < 0 && vm.x != 0 ? m - vm.x : vm.x,
+        v.y < 0 && vm.y != 0 ? m - vm.y : vm.y,
+        v.z < 0 && vm.z != 0 ? m - vm.z : vm.z
+    );
 }
 
 // RNG
@@ -183,15 +189,19 @@ uint block[N_CHUNK_LVLS + 1][3];
 uint tlc_sublvl; // for TLC the ray is currently in
 uint tlc_min_lvl; // for TLC the ray is currently in
 
-// Top level chunk memory grid offset
-// For a specified top level chunk memory grid (lvl/sublvl combo), how is the virtual memory grid offset from the physical
-// one. The virtual memory grid will wrap around when offset is greater than zero in any given dimension. The physical
-// memory grid is 1 larger in each dimension than the virtual one in order to buffer chunk loading, so there is one
-// value in each dim in the physical memory grid not present in the virtual one. This value is at (offset - 1) % N or
-// (offset + N-1) % N (with arithmetic modulo).
+// Top level chunk position in grid
 uvec3 tlc_pos_in_grid(uint lvl, uint grid_size, uvec3 pos) {
-    uint margin = (RENDER_N_TLCS - grid_size + 1) >> 1; // border thickness of TLCs loaded outside the current LOD.
+    // For grid sizes less than the full TLC render distance (typically the case when working with higher resolution LODs),
+    // the grid will be centered, so there is a margin or border of TLCs around this grid that are not in the current LOD.
+    uint margin = (RENDER_N_TLCS - grid_size + 1) >> 1;
+
+    // For a specified top level chunk memory grid (lvl/sublvl combo), the virtual memory grid is offset from the physical
+    // one. The virtual memory grid will wrap around when offset is greater than zero in any given dimension. The physical
+    // memory grid is 1 larger in each dimension than the virtual one in order to buffer chunk loading, so there is one
+    // value in each dim in the physical memory grid not present in the virtual one. This value is at (offset - 1) % N or
+    // (offset + N-1) % N (with arithmetic modulo).
     uvec3 offset = amod(ubo.start_tlc + int(margin), grid_size);
+
     return (pos + offset - margin) % grid_size;
 }
 
@@ -418,7 +428,7 @@ bool is_true_in_mask(uint idx, uint lvl) {
 uint grid_index(ivec3 ipos, uint ax_a, uint ax_b, uint ax_c, uint lvl, uint sublvl) {
     // Returns index within the current chunk. Expects ai, bi, ci to be 0 <= value < CHUNK_SIZE for non-TL chunks
     // and returns a value between 0 and CHUNK_SIZE^3
-    // For top level chunks, returns a value between 0 and RENDER_N_TLCHUNKS*RENDER_N_TLCHUNKS
+    // For top level chunks, returns a value between 0 and RENDER_N_TLCS^3
     uvec3 pos;
     pos[ax_a] = ipos.x;
     pos[ax_b] = ipos.y;
