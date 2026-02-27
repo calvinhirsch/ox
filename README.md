@@ -7,10 +7,19 @@ https://github.com/user-attachments/assets/47502fb0-4986-42f0-bd8b-558e2a95b0fc
 
 #### Real time ray tracing (dynamic lighting, reflections, etc.)
 
+https://github.com/user-attachments/assets/0390327a-53e8-4fed-9bb9-9d85f7481e84
+
+
 #### Large render distance
 This is 23^3 top level chunks (of size 64^3), or 2240^3 = 11.2m area
 
+https://github.com/user-attachments/assets/2a6174d3-801e-4ca7-8993-5e554f715acc
+
+
 #### Level of Detail (LOD) system
+
+https://github.com/user-attachments/assets/6c6f1aa4-19bb-47cb-9e09-679762f11b43
+
 
 ## Setup
 
