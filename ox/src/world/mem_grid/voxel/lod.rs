@@ -188,7 +188,6 @@ pub fn update_bitmask_bit_from_lower_lod_untracked(
     lower_sublvl: u8,
     chunk_size: ChunkSize,
     largest_chunk_lvl: u8,
-    block_fill_thresh: f32,
 ) {
     // Index of the lower corner of the 2x2x2 area in the lower LOD data we want to look at
     let mut visible_count = 0;
@@ -210,10 +209,7 @@ pub fn update_bitmask_bit_from_lower_lod_untracked(
         },
     );
 
-    bitmask.set_block(
-        voxel_index,
-        visible_count as f32 > block_fill_thresh * count as f32,
-    );
+    bitmask.set_block(voxel_index, visible_count > 0);
 }
 
 /// For LODs where there is only a bitmask and no voxel ID data, update the bitmask given a
@@ -228,7 +224,6 @@ pub fn update_bitmask_from_lower_lod_untracked(
     lower_sublvl: u8,
     chunk_size: ChunkSize,
     largest_chunk_lvl: u8,
-    block_fill_thresh: f32,
 ) {
     apply_to_voxels_in_lod(
         curr_lvl,
@@ -246,7 +241,6 @@ pub fn update_bitmask_from_lower_lod_untracked(
                 lower_sublvl,
                 chunk_size,
                 largest_chunk_lvl,
-                block_fill_thresh,
             );
         },
     );
@@ -336,7 +330,6 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        lod_block_fill_thresh: f32,
     ) {
         apply_to_voxels_in_lod(
             curr_lvl,
@@ -353,7 +346,6 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
                     lower_sublvl,
                     chunk_size,
                     largest_chunk_lvl,
-                    lod_block_fill_thresh,
                 );
                 self.voxel_ids[index] = voxel_id.unwrap_or(VE::empty()).id();
                 self.bitmask
@@ -371,7 +363,6 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        lod_block_fill_thresh: f32,
     ) -> Option<VE> {
         let mut visible_count = 0;
         let mut count = 0;
@@ -409,7 +400,7 @@ impl<'a> LodChunkDataWithVoxelsMut<'a> {
             },
         );
 
-        if visible_count as f32 >= lod_block_fill_thresh * count as f32 {
+        if visible_count > 0 {
             Some(
                 type_counts
                     .into_iter()
@@ -564,7 +555,6 @@ impl<'a> LodChunkEditor<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
     ) {
         match self.with_voxel_ids_mut() {
             LodChunkEditorVariantMut::WithVoxels(mut lod) => lod.update_voxel_from_lower_lod::<VE>(
@@ -575,7 +565,6 @@ impl<'a> LodChunkEditor<'a> {
                 lower_sublvl,
                 chunk_size,
                 largest_chunk_lvl,
-                block_fill_thresh,
             ),
             LodChunkEditorVariantMut::WithoutVoxels(mut lod) => lod
                 .update_bitmask_bit_from_lower_lod(
@@ -586,7 +575,6 @@ impl<'a> LodChunkEditor<'a> {
                     lower_sublvl,
                     chunk_size,
                     largest_chunk_lvl,
-                    block_fill_thresh,
                 ),
         }
     }
@@ -681,7 +669,6 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        lod_block_fill_thresh: f32,
     ) {
         self.data.update_from_lower_lod_voxels_untracked::<VE>(
             lower_lod,
@@ -691,7 +678,6 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
             lower_sublvl,
             chunk_size,
             largest_chunk_lvl,
-            lod_block_fill_thresh,
         );
         self.update_full_buffer_gpu();
     }
@@ -705,7 +691,6 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        lod_block_fill_thresh: f32,
     ) {
         let voxel_type = self.data.calc_voxel_from_lower_lod::<VE>(
             &lower_lod,
@@ -715,7 +700,6 @@ impl<'a> LodChunkEditorWithVoxelsMut<'a> {
             lower_sublvl,
             chunk_size,
             largest_chunk_lvl,
-            lod_block_fill_thresh,
         );
         self.set_voxel(index, voxel_type.unwrap_or(VE::empty()));
     }
@@ -742,7 +726,6 @@ impl<'a> LodChunkEditorWithoutVoxelsMut<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
     ) {
         update_bitmask_bit_from_lower_lod_untracked(
             self.bitmask,
@@ -753,7 +736,6 @@ impl<'a> LodChunkEditorWithoutVoxelsMut<'a> {
             lower_sublvl,
             chunk_size,
             largest_chunk_lvl,
-            block_fill_thresh,
         );
         self.updated_regions.add_region(voxel_index, 1);
     }
@@ -769,7 +751,6 @@ impl<'a> LodChunkEditorWithoutVoxelsMut<'a> {
         lower_sublvl: u8,
         chunk_size: ChunkSize,
         largest_chunk_lvl: u8,
-        block_fill_thresh: f32,
     ) {
         update_bitmask_from_lower_lod_untracked(
             self.bitmask,
@@ -780,7 +761,6 @@ impl<'a> LodChunkEditorWithoutVoxelsMut<'a> {
             lower_sublvl,
             chunk_size,
             largest_chunk_lvl,
-            block_fill_thresh,
         );
         self.update_full_buffer_gpu();
     }

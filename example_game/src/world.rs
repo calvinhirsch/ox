@@ -8,7 +8,8 @@ use ox::world::mem_grid::layer::{
 };
 use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::{
-    ChunkVoxelEditor, TakenChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
+    self, ChunkVoxelEditor, TakenChunkVoxelEditor, VoxelChunkLoadQueueItemData,
+    VoxelMemoryGridMetadata,
 };
 use ox::world::mem_grid::voxel::{ChunkVoxels, VoxelMemoryGrid};
 use ox::world::mem_grid::{EditMemoryGridChunk, MemoryGrid, MemoryGridLoadChunks};
@@ -296,6 +297,10 @@ fn generate_chunk(
     let voxel_size = CHUNK_SIZE.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
     let chunk_start_pt: VoxelPos<i64> = VoxelPos(chunk_pos.0 * tlc_size as i64);
     let grid_size = tlc_size / voxel_size;
+
+    for i in 0..voxel_ids_out.n_voxels() {
+        voxel_ids_out[i] = Block::Air as u8;
+    }
 
     for x_grid in 0..grid_size as u32 {
         // world coord

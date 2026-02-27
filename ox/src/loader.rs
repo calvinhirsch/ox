@@ -122,7 +122,7 @@ pub trait TakeChunkForLoading<BC, QI> {
     /// Called when chunk is first queued. Data in chunks is assumed to no longer be valid when they are
     /// queued. This method is called when a chunk is queued to mark it invalid so it is not used elsewhere.
     /// This should call `set_invalid` on all `LayerChunk`s. If any of them return `Err(())`, this should
-    /// also return that. However, it should not short circuit.
+    /// also return that. However, it should not short circuit, it should mark all present data invalid.
     fn mark_invalid(&mut self) -> Result<(), ()>;
 
     /// Mark chunk data as taken for loading. This should call `set_missing` on all `LayerChunk`s. Then,

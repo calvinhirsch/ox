@@ -158,13 +158,14 @@ impl<const N: usize> VoxelMemoryGrid<N> {
     ) -> Vec<ChunkLoadQueueItem<VoxelChunkLoadQueueItemData<N>>> {
         let mut chunks = HashMap::new();
 
-        for (i, lod) in self.lods.iter_mut().enumerate() {
+        for (lod_i, lod) in self.lods.iter_mut().enumerate() {
             for item in to_apply(lod) {
-                let e = chunks.entry(item.pos.0).or_insert(ChunkLoadQueueItem {
+                chunks.entry(item.pos.0).or_insert(ChunkLoadQueueItem {
                     pos: item.pos,
-                    data: VoxelChunkLoadQueueItemData { lods: [false; N] },
+                    data: VoxelChunkLoadQueueItemData {
+                        lods: std::array::from_fn(|i| i >= lod_i),
+                    },
                 });
-                e.data.lods[i] = true;
             }
         }
 
@@ -342,7 +343,6 @@ impl<'a, VE: VoxelTypeEnum, const N: usize> ChunkVoxelEditor<'a, VE, N> {
                 0,
                 meta.chunk_size,
                 meta.largest_lod.lvl,
-                meta.lod_block_fill_thresh,
             );
         }
 
@@ -393,6 +393,7 @@ impl<VE: VoxelTypeEnum, const N: usize> TakenChunkVoxelEditor<VE, N> {
         gen_func: F,
         metadata: &VoxelMemoryGridMetadata,
     ) {
+        #[derive(Debug)]
         struct LodId {
             index: usize,
             lvl: u8,
@@ -435,7 +436,6 @@ impl<VE: VoxelTypeEnum, const N: usize> TakenChunkVoxelEditor<VE, N> {
                                 last_vox_lod.sublvl,
                                 metadata.chunk_size,
                                 metadata.largest_lod().lvl,
-                                metadata.lod_block_fill_thresh(),
                             );
                         } else {
                             // Generate voxels
@@ -470,7 +470,6 @@ impl<VE: VoxelTypeEnum, const N: usize> TakenChunkVoxelEditor<VE, N> {
                             first_bitmask_lod.as_ref().unwrap().sublvl,
                             metadata.chunk_size(),
                             metadata.largest_lod().lvl,
-                            0.,
                         )
                     }
                 }
