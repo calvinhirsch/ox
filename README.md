@@ -5,6 +5,13 @@ A real-time ray tracing voxel rendering engine.
 
 https://github.com/user-attachments/assets/47502fb0-4986-42f0-bd8b-558e2a95b0fc
 
+#### Real time ray tracing (dynamic lighting, reflections, etc.)
+
+#### Large render distance
+This is 23^3 top level chunks (of size 64^3), or 2240^3 = 11.2m area
+
+#### Level of Detail (LOD) system
+
 ## Setup
 
 Rust: [](https://rustup.rs/)
@@ -16,7 +23,7 @@ To run: `cd example_game` ; `cargo run`
 
 see WALKTHROUGH.md
 
-## Implementation
+## Implementation overview
 
 Uses custom ray tracing in a compute shader (i.e., does not use hardware ray tracing) (see shaders/raytrace.comp)
 
@@ -30,6 +37,8 @@ Voxels are stored densely on the GPU (no sparse data structures, no meshing) in 
 There is a level of detail (LOD) system where unit voxels in further away chunks are combined together and rendered as larger voxels.
 
 A chunk loading system runs in parallel with main thread execution and allows you to define your own generation and persisting of chunks.
+
+See walkthrough for more details.
 
 ## Limitations
  - Relies on storing all voxel data densely in GPU memory (no meshing, sparse data structures, etc.)

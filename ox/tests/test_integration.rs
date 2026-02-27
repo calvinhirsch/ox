@@ -69,28 +69,26 @@ fn fill_chunk<const N: usize, VE: VoxelTypeEnum>(
     chunk: ChunkLoadQueueItem<VoxelChunkLoadQueueItemData<N>>,
     metadata: VoxelMemoryGridMetadata,
 ) {
-    unsafe {
-        data.load_new(
-            chunk.pos,
-            |_, lvl, sublvl, voxel_ids_out, tlc_size, largest_chunk_lvl| {
-                let voxel_size = CHUNK_SIZE.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
-                for x in 0..(tlc_size / voxel_size) as u32 {
-                    for y in 0..(tlc_size / voxel_size) as u32 {
-                        for z in 0..(tlc_size / voxel_size) as u32 {
-                            let idx = VoxelPosInLod {
-                                pos: Point3 { x, y, z },
-                                lvl,
-                                sublvl,
-                            }
-                            .index(CHUNK_SIZE, largest_chunk_lvl);
-                            voxel_ids_out[idx] = Block::SOLID as u8;
+    data.load_new(
+        chunk.pos,
+        |_, lvl, sublvl, voxel_ids_out, tlc_size, largest_chunk_lvl| {
+            let voxel_size = CHUNK_SIZE.size().pow(lvl as u32) * 2usize.pow(sublvl as u32);
+            for x in 0..(tlc_size / voxel_size) as u32 {
+                for y in 0..(tlc_size / voxel_size) as u32 {
+                    for z in 0..(tlc_size / voxel_size) as u32 {
+                        let idx = VoxelPosInLod {
+                            pos: Point3 { x, y, z },
+                            lvl,
+                            sublvl,
                         }
+                        .index(CHUNK_SIZE, largest_chunk_lvl);
+                        voxel_ids_out[idx] = Block::SOLID as u8;
                     }
                 }
-            },
-            &metadata,
-        );
-    }
+            }
+        },
+        &metadata,
+    );
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]

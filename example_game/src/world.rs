@@ -8,8 +8,7 @@ use ox::world::mem_grid::layer::{
 };
 use ox::world::mem_grid::utils::{cubed, ChunkSize, VoxelPosInLod};
 use ox::world::mem_grid::voxel::grid::{
-    self, ChunkVoxelEditor, TakenChunkVoxelEditor, VoxelChunkLoadQueueItemData,
-    VoxelMemoryGridMetadata,
+    ChunkVoxelEditor, TakenChunkVoxelEditor, VoxelChunkLoadQueueItemData, VoxelMemoryGridMetadata,
 };
 use ox::world::mem_grid::voxel::{ChunkVoxels, VoxelMemoryGrid};
 use ox::world::mem_grid::{EditMemoryGridChunk, MemoryGrid, MemoryGridLoadChunks};

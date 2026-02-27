@@ -356,7 +356,7 @@ fn main() {
                                             sublvl: 0,
                                         }
                                         .index(CHUNK_SIZE, voxel_md.largest_lod().lvl()),
-                                        Block::Metal,
+                                        Block::GreenLight,
                                         &voxel_md,
                                     );
                                 }
