@@ -2,6 +2,7 @@
 A real-time ray tracing voxel rendering engine.
 
 ## Demo
+Note: these recordings are very compressed
 
 #### Real time ray tracing (dynamic lighting, reflections, etc.)
 
