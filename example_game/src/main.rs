@@ -43,8 +43,8 @@ mod world;
 use crate::world::{load_chunk, WorldChunkLoadQueueItemData, WorldMemoryGrid};
 use world::{TakenWorldChunkEditor, CHUNK_SIZE};
 
-pub const CAMERA_SPEED: f32 = 20.;
-pub const CAMERA_SENS: f32 = 1.;
+pub const CAMERA_SPEED: f32 = 10.;
+pub const CAMERA_SENS: f32 = 0.001;
 
 const N_LODS: usize = 5;
 
