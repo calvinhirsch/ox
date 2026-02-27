@@ -3,8 +3,6 @@ A real-time ray tracing voxel rendering engine.
 
 ## Demo
 
-https://github.com/user-attachments/assets/47502fb0-4986-42f0-bd8b-558e2a95b0fc
-
 #### Real time ray tracing (dynamic lighting, reflections, etc.)
 
 https://github.com/user-attachments/assets/0390327a-53e8-4fed-9bb9-9d85f7481e84
