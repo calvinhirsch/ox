@@ -21,8 +21,8 @@ https://github.com/user-attachments/assets/6c6f1aa4-19bb-47cb-9e09-679762f11b43
 
 ## Setup
 
-Rust: [](https://rustup.rs/)
-Vulkan: [](https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting)
+Rust: [https://rustup.rs/](https://rustup.rs/)
+Vulkan: [https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting](https://github.com/vulkano-rs/vulkano/blob/master/README.md#setup-and-troubleshooting)
 
 To run: `cd example_game` ; `cargo run`
 
